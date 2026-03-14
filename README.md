@@ -9,8 +9,7 @@
 <p align="center">
   <a href="https://pypi.org/project/aegisrt/"><img alt="PyPI" src="https://img.shields.io/pypi/v/aegisrt?color=blue"></a>
   <a href="https://pypi.org/project/aegisrt/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/aegisrt"></a>
-  <a href="https://github.com/aegisrt-security/aegisrt/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
-  <a href="https://github.com/aegisrt-security/aegisrt/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/aegisrt-security/aegisrt/ci.yml?label=tests"></a>
+  <a href="https://github.com/duriantaco/aegisRT/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-green"></a>
   <a href="docs/owasp-coverage.md"><img alt="OWASP LLM Top 10" src="https://img.shields.io/badge/OWASP%20LLM%20Top%2010-7%2F10%20covered-orange"></a>
   <a href="https://pypi.org/project/aegisrt/"><img alt="Downloads" src="https://img.shields.io/pypi/dm/aegisrt"></a>
 </p>
@@ -723,7 +722,7 @@ AegisRT is a Python-native security testing framework with YAML config, static c
 Contributions are welcome. To get started:
 
 ```bash
-git clone https://github.com/aegisrt-security/aegisrt.git
+git clone https://github.com/duriantaco/aegisRT.git
 cd aegisrt
 pip install -e ".[dev]"
 pytest
