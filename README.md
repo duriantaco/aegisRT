@@ -25,6 +25,12 @@
 
 ---
 
+<p align="center">
+  <img src="assets/ss.png" alt="AegisRT Dashboard" width="720">
+</p>
+
+---
+
 AegisRT is an LLM security testing framework and vulnerability scanner purpose-built for applications that integrate large language models. Use it to red team chatbots, AI agents, and any LLM-powered application. It ships two complementary modes -- **Runtime Eval** (probe a live LLM endpoint or callback with adversarial inputs and score the responses) and **Static Audit** (scan Python source for common LLM security anti-patterns) -- and produces reports in five formats (terminal, JSON, HTML, SARIF, JUnit) so results plug straight into existing CI/CD and SIEM pipelines. Whether you need chatbot security testing, prompt injection scanning, or OWASP LLM Top 10 compliance, AegisRT has you covered.
 
 ## Key features
