@@ -1,0 +1,22 @@
+version: 1
+
+target:
+  type: openai_compat
+  url: "https://api.openai.com/v1/chat/completions"
+  timeout_seconds: 30
+  headers:
+    Authorization: "Bearer ${OPENAI_API_KEY}"
+  params:
+    model: "gpt-4o"
+
+probes:
+  - id: company_prompt_dataset
+    extends: prompt_injection
+    generator: dataset
+    generator_config:
+      path: "./examples/starter_injection_prompts.jsonl"
+      format: jsonl
+
+report:
+  formats: [terminal, json, html]
+  output_dir: .aegisrt

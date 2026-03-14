@@ -1,0 +1,1929 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AegisRT</title>
+<link rel="icon" type="image/png" href="/static/aegisthumb.png">
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: { extend: {
+    colors: {
+      bg: { DEFAULT: '#0d1117', card: '#161b22', border: '#30363d', hover: '#1c2128', input: '#0d1117' },
+      fg: { DEFAULT: '#e6edf3', dim: '#8b949e', dimmer: '#484f58' },
+      pass: '#3fb950', fail: '#f85149', warn: '#d29922', info: '#58a6ff',
+    },
+    fontFamily: { sans: ['-apple-system','BlinkMacSystemFont','Segoe UI','Noto Sans','Helvetica','Arial','sans-serif'], mono: ['ui-monospace','SFMono-Regular','SF Mono','Menlo','Consolas','monospace'] }
+  }}
+}
+</script>
+<style>
+  [x-cloak]{display:none!important}
+  body{background:#0d1117;color:#e6edf3}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-thumb{background:#30363d;border-radius:3px}
+  pre{white-space:pre-wrap;word-break:break-word}
+  .row-fail{border-left:3px solid #f85149}
+  .row-pass{border-left:3px solid #3fb950}
+  .sidebar-item.active{background:#1c2128;border-left:2px solid #58a6ff}
+  .trace-step{position:relative}
+  .trace-step:not(:last-child)::after{content:'';position:absolute;left:7px;top:18px;bottom:-14px;width:1px;background:#30363d}
+</style>
+</head>
+<body class="dark">
+<div x-data="app()" x-init="init()" x-cloak @keydown.escape.window="closeTraceInspector(); closeDeleteRunModal()" class="h-screen flex flex-col overflow-hidden">
+
+<!-- Top bar -->
+<header class="h-10 flex items-center justify-between px-4 border-b border-bg-border flex-shrink-0 bg-bg-card">
+  <div class="flex items-center gap-4">
+    <img src="/static/aegisthumb.png" alt="AegisRT" class="h-6 w-6 rounded">
+    <span class="font-semibold text-sm text-fg">AegisRT</span>
+    <div class="flex items-center gap-0.5 text-xs">
+      <button @click="page='eval'" :class="page==='eval' ? 'text-fg bg-bg-hover' : 'text-fg-dim hover:text-fg'" class="px-2.5 py-1 rounded">Evaluate</button>
+      <button @click="page='investigate'" :class="page==='investigate' ? 'text-fg bg-bg-hover' : 'text-fg-dim hover:text-fg'" class="px-2.5 py-1 rounded">Investigate</button>
+      <button @click="page='probes'" :class="page==='probes' ? 'text-fg bg-bg-hover' : 'text-fg-dim hover:text-fg'" class="px-2.5 py-1 rounded">Probes</button>
+      <button @click="page='compare'" :class="page==='compare' ? 'text-fg bg-bg-hover' : 'text-fg-dim hover:text-fg'" class="px-2.5 py-1 rounded">Compare</button>
+    </div>
+  </div>
+  <div class="flex items-center gap-3">
+    <template x-if="currentRun">
+      <div class="flex items-center gap-2">
+        <button @click="copyCurrentRunId()" class="text-[10px] text-fg-dim hover:text-fg px-1.5 py-0.5 rounded border border-bg-border">Copy Run ID</button>
+        <button @click="openCompareWithPrevious()" :disabled="!hasPreviousRun()" class="text-[10px] text-fg-dim hover:text-fg px-1.5 py-0.5 rounded border border-bg-border disabled:opacity-40 disabled:cursor-not-allowed">Compare Prev</button>
+        <a :href="'/api/runs/'+currentRun.run_id+'/report/json'" target="_blank" class="text-[10px] text-fg-dim hover:text-fg px-1.5 py-0.5 rounded border border-bg-border">JSON</a>
+        <a :href="'/api/runs/'+currentRun.run_id+'/report/html'" target="_blank" class="text-[10px] text-fg-dim hover:text-fg px-1.5 py-0.5 rounded border border-bg-border">HTML</a>
+        <a :href="'/api/runs/'+currentRun.run_id+'/report/sarif'" target="_blank" class="text-[10px] text-fg-dim hover:text-fg px-1.5 py-0.5 rounded border border-bg-border">SARIF</a>
+      </div>
+    </template>
+    <span class="text-[10px] text-fg-dimmer font-mono" x-text="'v'+version"></span>
+  </div>
+</header>
+
+<!-- ==================== EVAL PAGE (main) ==================== -->
+<div x-show="page==='eval'||page==='investigate'" class="flex-1 flex overflow-hidden">
+
+  <!-- Sidebar: run list -->
+  <aside class="w-56 flex-shrink-0 border-r border-bg-border bg-bg-card overflow-y-auto">
+    <div class="p-2">
+      <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold px-2 py-1.5">Evals (<span x-text="runs.length"></span>)</div>
+      <div x-show="runs.length===0" class="text-xs text-fg-dimmer px-2 py-4">No runs yet</div>
+      <template x-for="run in runs" :key="run.run_id">
+        <div @click="selectRun(run.run_id)"
+          class="sidebar-item group px-2 py-1.5 rounded cursor-pointer text-xs transition-colors border-l-2 border-transparent"
+          :class="currentRun && currentRun.run_id === run.run_id ? 'active' : 'hover:bg-bg-hover'">
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[10px]" :class="currentRun && currentRun.run_id === run.run_id ? 'text-info' : 'text-fg-dim'" x-text="run.run_id.slice(0,8)"></span>
+            <div class="flex items-center gap-1">
+              <span class="text-[10px] text-fg-dimmer" x-text="timeAgo(run.timestamp)"></span>
+              <button
+                @click.stop="openDeleteRunModal(run)"
+                type="button"
+                title="Delete eval"
+                class="opacity-70 hover:opacity-100 focus:opacity-100 transition-opacity p-1 rounded border border-fail/20 text-fg-dimmer hover:text-fail hover:bg-fail/10">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" class="w-3 h-3" aria-hidden="true">
+                  <path d="M6.5 1h3a1 1 0 0 1 1 1v1H13a.5.5 0 0 1 0 1h-.5v8.5A1.5 1.5 0 0 1 11 14H5a1.5 1.5 0 0 1-1.5-1.5V4H3a.5.5 0 0 1 0-1h2.5V2a1 1 0 0 1 1-1Zm3 2V2h-3v1h3Zm-4 1v8.5a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5V4h-7ZM6.5 6a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5Zm3 0a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5Z"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 mt-0.5">
+            <span class="text-[10px] text-pass" x-text="run.passed+'P'"></span>
+            <span class="text-[10px] text-fail" x-text="run.failed+'F'"></span>
+            <span class="text-[10px] font-semibold ml-auto" :class="getPassRate(run)>=90?'text-pass':getPassRate(run)>=70?'text-warn':'text-fail'" x-text="getPassRate(run)+'%'"></span>
+          </div>
+        </div>
+      </template>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <div class="flex-1 flex flex-col overflow-hidden">
+
+    <!-- No run selected -->
+    <div x-show="!currentRun" class="flex-1 flex items-center justify-center text-fg-dimmer text-sm">
+      <div class="text-center">
+        <div class="text-lg mb-2">No run selected</div>
+        <div class="text-xs" x-show="runs.length>0">Select a run from the sidebar to evaluate or investigate it</div>
+        <div class="text-xs" x-show="runs.length===0">Run <code class="bg-bg-card px-1 rounded">aegisrt run -c aegisrt.yaml</code> to get started</div>
+      </div>
+    </div>
+
+    <!-- Run loaded -->
+    <template x-if="currentRun">
+      <div class="flex-1 flex flex-col overflow-hidden">
+
+        <div x-show="page==='eval'" class="flex-1 flex flex-col overflow-hidden">
+
+        <!-- Summary bar -->
+        <div class="flex items-center gap-4 px-4 py-2 border-b border-bg-border flex-shrink-0 bg-bg-card">
+          <span class="font-mono text-xs text-info" x-text="currentRun.run_id"></span>
+          <span class="text-[10px] text-fg-dimmer" x-text="formatDate(currentRun.timestamp)"></span>
+          <span x-show="runLoading" class="text-[10px] px-1.5 py-0.5 rounded border border-info/20 text-info">Loading run...</span>
+          <div class="flex items-center gap-3 text-xs">
+            <span class="text-pass font-semibold" x-text="runSummary.passed+' passed'"></span>
+            <span class="text-fail font-semibold" x-text="runSummary.failed+' failed'"></span>
+            <span class="font-bold" :class="runSummary.passRateNum>=90?'text-pass':runSummary.passRateNum>=70?'text-warn':'text-fail'" x-text="runSummary.passRate+'%'"></span>
+          </div>
+          <div x-show="runSummary.duration!=='-'" class="text-[10px] text-fg-dimmer" x-text="runSummary.duration"></div>
+          <div class="text-[10px] px-1.5 py-0.5 rounded border" :class="runTargetLabel() ? 'border-bg-border text-fg-dim' : 'border-warn/20 text-warn'">
+            Target <span class="font-mono" :class="runTargetLabel() ? 'text-fg' : 'text-warn'" x-text="runTargetLabel() || 'not captured'"></span>
+          </div>
+          <div x-show="runJudgeModel()" class="text-[10px] px-1.5 py-0.5 rounded border border-info/20 text-info">
+            Judge <span class="font-mono" x-text="runJudgeModel()"></span>
+          </div>
+          <div x-show="runAttackerModel()" class="text-[10px] px-1.5 py-0.5 rounded border border-warn/20 text-warn">
+            Attacker <span class="font-mono" x-text="runAttackerModel()"></span>
+          </div>
+          <button @click="page='investigate'" x-show="allFindings.length" class="text-[10px] px-2 py-1 rounded border border-fail/20 text-fail hover:bg-fail/10 transition-colors">
+            Investigate <span x-text="allFindings.length"></span> findings
+          </button>
+
+          <!-- Filter bar (inline) -->
+          <div class="flex items-center gap-2 ml-auto">
+            <select x-model="detailFilter.status" @change="setDetailPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+              <option value="">All</option>
+              <option value="failed">Failures</option>
+              <option value="passed">Passes</option>
+            </select>
+            <select x-model="detailFilter.triage" @change="setDetailPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+              <option value="">All triage</option>
+              <option value="untriaged">Untriaged</option>
+              <template x-for="status in triageStatuses" :key="'filter-'+status">
+                <option :value="status" x-text="prettyKey(status)"></option>
+              </template>
+            </select>
+            <select x-model="detailFilter.probe" @change="setDetailPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+              <option value="">All probes</option>
+              <template x-for="p in uniqueProbes" :key="p"><option :value="p" x-text="p"></option></template>
+            </select>
+            <input x-model.debounce.150ms="detailFilter.search" @input="setDetailPage(1)" type="text" placeholder="Search..." class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1 w-40">
+            <select x-model.number="detailPageSize" @change="setDetailPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+              <option :value="25">25</option>
+              <option :value="50">50</option>
+              <option :value="100">100</option>
+            </select>
+            <button @click="setDetailPage(detailCurrentPage-1)" :disabled="detailCurrentPage<=1" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed">Prev</button>
+            <span class="text-[10px] text-fg-dimmer font-mono" x-text="detailCurrentPage+'/'+detailPageCount"></span>
+            <button @click="setDetailPage(detailCurrentPage+1)" :disabled="detailCurrentPage>=detailPageCount" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+            <span class="text-[10px] text-fg-dimmer" x-text="filteredResults.length+'/'+currentRun.results.length"></span>
+          </div>
+        </div>
+
+        <div x-show="missingMetadataWarnings().length" class="mx-4 mt-3 bg-bg border border-warn/20 rounded p-3">
+          <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Missing Metadata</div>
+          <div class="space-y-1 mt-2">
+            <template x-for="warning in missingMetadataWarnings()" :key="'run-meta-warning-'+warning">
+              <div class="text-[11px] text-fg-dim" x-text="warning"></div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Probe breakdown tabs -->
+        <div class="flex items-center gap-1 px-4 py-1.5 border-b border-bg-border flex-shrink-0 overflow-x-auto">
+          <button @click="detailFilter.probe=''; setDetailPage(1)"
+            class="text-[10px] px-2 py-0.5 rounded transition-colors flex-shrink-0"
+            :class="!detailFilter.probe ? 'bg-info/20 text-info' : 'text-fg-dim hover:text-fg'">All</button>
+          <template x-for="[pid, stats] in probeBreakdown" :key="pid">
+            <button @click="detailFilter.probe = detailFilter.probe===pid ? '' : pid; setDetailPage(1)"
+              class="text-[10px] px-2 py-0.5 rounded font-mono transition-colors flex-shrink-0 flex items-center gap-1"
+              :class="detailFilter.probe===pid ? 'bg-info/20 text-info' : 'text-fg-dim hover:text-fg'">
+              <span x-text="pid.replace(/_/g,' ')"></span>
+              <span class="text-pass" x-text="stats.passed"></span>/<span class="text-fail" x-text="stats.failed"></span>
+            </button>
+          </template>
+        </div>
+
+        <!-- Results table (scrollable) -->
+        <div class="flex-1 overflow-y-auto">
+          <!-- Table header -->
+          <div class="grid grid-cols-12 bg-bg-card border-b border-bg-border text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold sticky top-0 z-10">
+            <div class="col-span-1 px-3 py-1.5">Result</div>
+            <div class="col-span-1 px-3 py-1.5">Probe</div>
+            <div class="col-span-4 px-3 py-1.5">Input (attack prompt)</div>
+            <div class="col-span-4 px-3 py-1.5">Output (model response)</div>
+            <div class="col-span-2 px-3 py-1.5">Grading</div>
+          </div>
+
+          <!-- Rows -->
+          <template x-for="(result, idx) in pagedFilteredResults" :key="result.case_id+'-'+idx+'-'+detailCurrentPage">
+            <div>
+              <div class="grid grid-cols-12 border-b border-bg-border/50 cursor-pointer hover:bg-bg-hover transition-colors"
+                   :class="result.passed ? 'row-pass' : 'row-fail'" @click="toggleRow(idx)">
+                <div class="col-span-1 px-3 py-2.5 flex flex-col gap-1">
+                  <span class="text-[10px] font-bold px-1 py-0.5 rounded w-fit" :class="result.passed?'bg-pass/15 text-pass':'bg-fail/15 text-fail'" x-text="result.passed?'PASS':'FAIL'"></span>
+                  <span class="text-[10px] px-1 py-0.5 rounded w-fit" :class="sevBadgeClass(result.severity)" x-text="result.severity"></span>
+                  <span class="text-[10px] px-1 py-0.5 rounded w-fit" :class="triageBadgeClass(triageStatusValue(result))" x-text="triageStatusLabel(result)"></span>
+                </div>
+                <div class="col-span-1 px-3 py-2.5">
+                  <span class="text-[11px] font-mono text-info" x-text="result.probe_id.replace(/_/g,' ')"></span>
+                </div>
+                <div class="col-span-4 px-3 py-2.5">
+                  <pre class="text-[11px] text-fg line-clamp-3" x-text="result.input_text||'(empty)'"></pre>
+                </div>
+                <div class="col-span-4 px-3 py-2.5">
+                  <pre class="text-[11px] line-clamp-3" :class="result.passed?'text-fg-dim':'text-fail'" x-text="result.response_text||'(empty)'"></pre>
+                </div>
+                <div class="col-span-2 px-3 py-2.5 text-[11px] text-fg-dim">
+                  <div class="flex items-center gap-1">
+                    <span class="text-fg-dimmer">Score:</span>
+                    <span class="font-mono font-semibold" :class="result.score<0.5?'text-pass':'text-fail'" x-text="result.score.toFixed(2)"></span>
+                  </div>
+                  <div class="text-[10px] text-fg-dimmer mt-0.5 line-clamp-1" x-text="gradingSummary(result)"></div>
+                  <button @click.stop="openTraceInspector(result)" class="mt-2 text-[10px] px-2 py-1 rounded border border-info/20 text-info hover:bg-info/10 transition-colors">
+                    Inspect trace
+                  </button>
+                </div>
+              </div>
+
+	              <!-- Expanded: Kill Chain -->
+	              <div x-show="expandedRows.includes(idx)" x-transition class="bg-bg border-b border-bg-border px-4 py-4">
+	                <div class="text-[10px] text-fg-dimmer uppercase tracking-wider mb-2 font-semibold">Execution Context</div>
+	                <div class="grid md:grid-cols-2 xl:grid-cols-4 gap-2 mb-4">
+	                  <div class="bg-bg-card border border-bg-border rounded p-2.5">
+	                    <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Target Model</div>
+	                    <div class="mt-1 text-sm font-semibold text-fg font-mono" x-text="resultTargetLabel(result) || 'not captured'"></div>
+	                    <div class="text-[10px] text-fg-dimmer mt-1">type <span class="font-mono" x-text="runTargetType() || 'unknown'"></span></div>
+	                  </div>
+	                  <div class="bg-bg-card border border-info/20 rounded p-2.5">
+	                    <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Judge Model</div>
+	                    <div class="mt-1 text-sm font-semibold text-info font-mono" x-text="runJudgeModel() || 'not configured'"></div>
+	                    <div class="text-[10px] text-fg-dimmer mt-1">llm-as-judge</div>
+	                  </div>
+	                  <div class="bg-bg-card border border-warn/20 rounded p-2.5">
+	                    <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Attacker Model</div>
+	                    <div class="mt-1 text-sm font-semibold text-warn font-mono" x-text="runAttackerModel() || 'not configured'"></div>
+	                    <div class="text-[10px] text-fg-dimmer mt-1">adversarial generation</div>
+	                  </div>
+	                  <div class="bg-bg-card border border-bg-border rounded p-2.5">
+	                    <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Endpoint</div>
+	                    <div class="mt-1 text-sm font-semibold text-fg-dim font-mono break-all" x-text="runTargetEndpoint() || 'n/a'"></div>
+	                    <div class="text-[10px] text-fg-dimmer mt-1">run-level target</div>
+	                  </div>
+	                </div>
+	                <!-- Kill chain pipeline -->
+	                <div class="text-[10px] text-fg-dimmer uppercase tracking-wider mb-2 font-semibold">Kill Chain</div>
+	                <div class="flex items-stretch gap-0 mb-4 overflow-x-auto">
+                  <!-- 1: Seed -->
+                  <div class="flex-1 min-w-[140px] bg-bg-card border border-bg-border rounded-l p-2.5">
+                    <div class="flex items-center gap-1 mb-1.5">
+                      <span class="w-4 h-4 rounded bg-info/20 text-info flex items-center justify-center text-[9px] font-bold">1</span>
+                      <span class="text-[9px] font-semibold text-info uppercase">Seed</span>
+                    </div>
+                    <div class="text-[10px] text-fg-dimmer">gen: <span class="text-fg-dim" x-text="getTraceGenerator(result)"></span></div>
+                    <div class="text-[10px] text-fg-dim font-mono mt-0.5" x-show="getTraceOriginalInput(result)" x-text="truncateText(getTraceOriginalInput(result),60)"></div>
+                  </div>
+                  <div class="flex items-center text-fg-dimmer text-xs">&#9654;</div>
+                  <!-- 2: Transform -->
+                  <div class="flex-1 min-w-[120px] border p-2.5" :class="getTraceConverterChain(result)?'bg-purple-500/5 border-purple-500/20':'bg-bg-card border-bg-border'">
+                    <div class="flex items-center gap-1 mb-1.5">
+                      <span class="w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold" :class="getTraceConverterChain(result)?'bg-purple-500/20 text-purple-400':'bg-bg-hover text-fg-dimmer'">2</span>
+                      <span class="text-[9px] font-semibold uppercase" :class="getTraceConverterChain(result)?'text-purple-400':'text-fg-dimmer'">Transforms</span>
+                    </div>
+                    <div x-show="getTraceConverterChain(result)" class="text-[10px] text-purple-300 font-mono" x-text="getTraceConverterChain(result)"></div>
+                    <div x-show="!getTraceConverterChain(result)" class="text-[10px] text-fg-dimmer italic">none</div>
+                    <div class="text-[9px] text-fg-dimmer mt-1">converter chain / prompt mutation</div>
+                  </div>
+                  <div class="flex items-center text-fg-dimmer text-xs">&#9654;</div>
+                  <!-- 3: Prompt -->
+                  <div class="flex-1 min-w-[180px] bg-bg-card border border-bg-border p-2.5">
+                    <div class="flex items-center gap-1 mb-1.5">
+                      <span class="w-4 h-4 rounded bg-warn/20 text-warn flex items-center justify-center text-[9px] font-bold">3</span>
+                      <span class="text-[9px] font-semibold text-warn uppercase">Prompt</span>
+                    </div>
+                    <pre class="text-[10px] text-fg-dim max-h-16 overflow-auto" x-text="result.input_text"></pre>
+                  </div>
+                  <div class="flex items-center text-fg-dimmer text-xs">&#9654;</div>
+                  <!-- 4: Response -->
+                  <div class="flex-1 min-w-[180px] border p-2.5" :class="result.passed?'bg-bg-card border-bg-border':'bg-fail/5 border-fail/20'">
+                    <div class="flex items-center gap-1 mb-1.5">
+                      <span class="w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold" :class="result.passed?'bg-pass/20 text-pass':'bg-fail/20 text-fail'">4</span>
+                      <span class="text-[9px] font-semibold uppercase" :class="result.passed?'text-pass':'text-fail'">Response</span>
+                      <span x-show="getTraceLatency(result)" class="text-[9px] text-fg-dimmer ml-auto" x-text="getTraceLatency(result)"></span>
+                    </div>
+                    <pre class="text-[10px] max-h-16 overflow-auto" :class="result.passed?'text-fg-dim':'text-fail'" x-text="result.response_text"></pre>
+                    <div x-show="getTraceTokens(result)" class="text-[9px] text-fg-dimmer mt-1" x-text="getTraceTokens(result)"></div>
+	                    <div class="text-[9px] text-fg-dimmer mt-1 font-mono" x-text="'target: ' + (resultTargetLabel(result) || 'not captured')"></div>
+	                  </div>
+                  <div class="flex items-center text-fg-dimmer text-xs">&#9654;</div>
+                  <!-- 5: Detectors -->
+                  <div class="flex-1 min-w-[150px] bg-bg-card border border-bg-border p-2.5">
+                    <div class="flex items-center gap-1 mb-1.5">
+                      <span class="w-4 h-4 rounded bg-warn/20 text-warn flex items-center justify-center text-[9px] font-bold">5</span>
+                      <span class="text-[9px] font-semibold text-warn uppercase">Detect</span>
+                    </div>
+                    <template x-for="det in getDetections(result)" :key="det.detector">
+                      <div class="flex items-center gap-1 text-[10px] mb-0.5">
+                        <span class="w-1.5 h-1.5 rounded-full" :class="det.triggered?'bg-fail':'bg-pass'"></span>
+                        <span class="font-mono" :class="det.triggered?'text-fail':'text-fg-dimmer'" x-text="det.detector.replace(/_/g,' ')"></span>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="flex items-center text-fg-dimmer text-xs">&#9654;</div>
+                  <!-- 6: Verdict -->
+                  <div class="w-[80px] flex-shrink-0 border rounded-r p-2.5 flex flex-col items-center justify-center"
+                       :class="result.passed?'bg-pass/10 border-pass/30':'bg-fail/10 border-fail/30'">
+                    <div class="text-sm font-bold" :class="result.passed?'text-pass':'text-fail'" x-text="result.passed?'PASS':'FAIL'"></div>
+                    <div class="text-[9px] text-fg-dimmer font-mono" x-text="result.score.toFixed(2)"></div>
+                  </div>
+                </div>
+
+                <!-- Evidence + Remediation -->
+                <div class="grid grid-cols-2 gap-4">
+                  <div class="space-y-1.5">
+                    <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Detection Evidence</div>
+                    <template x-for="det in getDetections(result)" :key="'ev-'+det.detector">
+                      <div class="text-[11px] bg-bg-card rounded p-2 border border-bg-border">
+                        <div class="flex items-center gap-1.5 mb-0.5">
+                          <span class="text-[9px] font-bold px-1 py-0.5 rounded" :class="det.triggered?'bg-fail/15 text-fail':'bg-pass/15 text-pass'" x-text="det.triggered?'TRIGGERED':'CLEAN'"></span>
+                          <span class="font-mono text-fg-dim" x-text="det.detector"></span>
+                          <span class="text-fg-dimmer ml-auto font-mono" x-text="det.score!==undefined?det.score.toFixed(2):''"></span>
+                        </div>
+                        <div x-show="det.evidence?.matched_patterns?.length" class="text-[10px] text-fail/80 mt-1">Matched: <span class="font-mono" x-text="(det.evidence?.matched_patterns||[]).join(', ')"></span></div>
+                        <div x-show="det.evidence?.policy_marker_hits?.length" class="text-[10px] text-fail/80 mt-1">Policy: <span class="font-mono" x-text="(det.evidence?.policy_marker_hits||[]).join(', ')"></span></div>
+                        <div x-show="det.evidence?.explanation" class="text-[10px] text-fg-dim mt-1" x-text="det.evidence?.explanation"></div>
+                      </div>
+                    </template>
+                    <div class="text-[10px] text-fg-dimmer">
+                      Score: <span class="font-mono" x-text="(result.evidence?.aggregated_score??result.score).toFixed(2)"></span>
+                      / threshold: <span class="font-mono" x-text="(result.evidence?.threshold??0.5).toFixed(2)"></span>
+                    </div>
+                  </div>
+                  <div x-show="result.remediation?.length">
+                    <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-1.5">Remediation</div>
+                    <ul class="space-y-1">
+                      <template x-for="step in result.remediation" :key="step">
+                        <li class="text-[11px] text-fg-dim flex items-start gap-1"><span class="text-info">&#8226;</span><span x-text="step"></span></li>
+                      </template>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <div x-show="filteredResults.length===0&&currentRun" class="text-fg-dimmer text-center py-12 text-sm">No results match filters.</div>
+        </div>
+        </div>
+
+	        <div x-show="page==='investigate'" class="flex-1 flex flex-col overflow-hidden">
+	          <div class="px-4 py-3 border-b border-bg-border bg-bg-card">
+            <div class="flex items-start justify-between gap-6 flex-wrap">
+              <div>
+                <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Investigate</div>
+                <h2 class="text-sm font-semibold text-fg mt-1">Security Findings</h2>
+                <div class="text-[11px] text-fg-dim mt-1">Review exploit paths, assign ownership, and move findings through triage without leaving the run context.</div>
+              </div>
+              <div class="text-[10px] text-fg-dimmer space-y-1">
+                <div>Run <span class="font-mono text-info" x-text="currentRun.run_id"></span></div>
+                <div>Timestamp <span class="font-mono" x-text="formatDate(currentRun.timestamp)"></span></div>
+                <div>Active <span class="font-mono" x-text="investigationSummary.open"></span> / Closed <span class="font-mono" x-text="investigationSummary.closed"></span></div>
+              </div>
+            </div>
+
+	            <div class="grid sm:grid-cols-2 xl:grid-cols-4 gap-2 mt-4">
+              <div class="bg-bg border border-fail/20 rounded p-3">
+                <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Open Findings</div>
+                <div class="mt-1 text-lg font-semibold text-fail" x-text="investigationSummary.open"></div>
+                <div class="text-[10px] text-fg-dimmer">not fixed or false positive</div>
+              </div>
+              <div class="bg-bg border border-warn/20 rounded p-3">
+                <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Needs Review</div>
+                <div class="mt-1 text-lg font-semibold text-warn" x-text="investigationSummary.needsReview"></div>
+                <div class="text-[10px] text-fg-dimmer">new or unassigned triage</div>
+              </div>
+              <div class="bg-bg border border-fail/20 rounded p-3">
+                <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Critical + High</div>
+                <div class="mt-1 text-lg font-semibold text-fail" x-text="investigationSummary.criticalHigh"></div>
+                <div class="text-[10px] text-fg-dimmer">highest-impact findings</div>
+              </div>
+              <div class="bg-bg border border-pass/20 rounded p-3">
+                <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Closed</div>
+                <div class="mt-1 text-lg font-semibold text-pass" x-text="investigationSummary.closed"></div>
+                <div class="text-[10px] text-fg-dimmer">fixed or false positive</div>
+	              </div>
+	            </div>
+
+            <div x-show="missingMetadataWarnings().length" class="mt-4 bg-bg border border-warn/20 rounded p-3">
+              <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Missing Metadata</div>
+              <div class="space-y-1 mt-2">
+                <template x-for="warning in missingMetadataWarnings()" :key="'investigate-meta-warning-'+warning">
+                  <div class="text-[11px] text-fg-dim" x-text="warning"></div>
+                </template>
+              </div>
+            </div>
+
+            <div x-show="attackSessions.length" class="mt-4">
+              <div class="flex items-center justify-between gap-4 mb-3">
+                <div>
+                  <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Attack Sessions</div>
+                  <div class="text-[11px] text-fg-dim mt-1">Grouped multi-step traces, conversation attacks, and future agent/tool chains.</div>
+                </div>
+                <div class="text-[10px] text-fg-dimmer">
+                  <span class="font-mono" x-text="attackSessions.length"></span> active session views
+                </div>
+              </div>
+
+              <div class="grid sm:grid-cols-2 xl:grid-cols-4 gap-2">
+                <div class="bg-bg border border-info/20 rounded p-3">
+                  <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Sessions</div>
+                  <div class="mt-1 text-lg font-semibold text-info" x-text="attackSessionSummary.total"></div>
+                  <div class="text-[10px] text-fg-dimmer">grouped attack chains</div>
+                </div>
+                <div class="bg-bg border border-warn/20 rounded p-3">
+                  <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Multi-step</div>
+                  <div class="mt-1 text-lg font-semibold text-warn" x-text="attackSessionSummary.multiStep"></div>
+                  <div class="text-[10px] text-fg-dimmer">sessions with more than one hop</div>
+                </div>
+                <div class="bg-bg border border-fail/20 rounded p-3">
+                  <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Tool Reach</div>
+                  <div class="mt-1 text-lg font-semibold text-fail" x-text="attackSessionSummary.withTools"></div>
+                  <div class="text-[10px] text-fg-dimmer">sessions invoking tools</div>
+                </div>
+                <div class="bg-bg border border-pass/20 rounded p-3">
+                  <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Boundary Crossings</div>
+                  <div class="mt-1 text-lg font-semibold text-pass" x-text="attackSessionSummary.crossBoundary"></div>
+                  <div class="text-[10px] text-fg-dimmer">sessions with trust boundaries</div>
+                </div>
+              </div>
+
+              <div class="grid xl:grid-cols-2 gap-2 mt-3">
+                <template x-for="session in attackSessions" :key="'attack-session-'+session.session_id">
+                  <div class="bg-bg border border-bg-border rounded p-3">
+                    <div class="flex items-start justify-between gap-4">
+                      <div class="min-w-0">
+                        <div class="flex items-center gap-2 flex-wrap mb-1">
+                          <span class="text-[10px] px-1 py-0.5 rounded" :class="sevBadgeClass(session.highest_severity)" x-text="session.highest_severity"></span>
+                          <span class="text-[10px] px-1 py-0.5 rounded bg-bg-hover text-fg-dim">session</span>
+                          <span class="text-[10px] font-mono text-info" x-text="session.session_id"></span>
+                        </div>
+                        <div class="text-[11px] text-fg-dim">
+                          Attack <span class="font-mono" x-text="session.attack_id"></span>
+                        </div>
+                      </div>
+                      <div class="text-right text-[10px] text-fg-dimmer space-y-1">
+                        <div><span class="font-mono text-fg" x-text="session.open_findings"></span> open</div>
+                        <div><span class="font-mono text-fg" x-text="session.finding_count"></span> findings</div>
+                        <div><span class="font-mono text-fg" x-text="session.step_count"></span> steps</div>
+                      </div>
+                    </div>
+
+	                    <div class="grid grid-cols-2 gap-2 mt-3 text-[10px]">
+	                      <div class="bg-bg-card border border-bg-border rounded p-2">
+	                        <div class="text-fg-dimmer uppercase tracking-wider">Participants</div>
+	                        <div class="text-fg-dim font-mono mt-1" x-text="session.participants.length ? session.participants.join(', ') : 'n/a'"></div>
+                      </div>
+                      <div class="bg-bg-card border border-bg-border rounded p-2">
+                        <div class="text-fg-dimmer uppercase tracking-wider">Tools / Memory</div>
+	                        <div class="text-fg-dim font-mono mt-1" x-text="session.tool_names.length ? session.tool_names.join(', ') : (session.memory_stores.length ? session.memory_stores.join(', ') : 'n/a')"></div>
+	                      </div>
+	                    </div>
+
+	                    <div class="flex items-center gap-4 flex-wrap mt-3 text-[10px] text-fg-dimmer">
+	                      <span>Boundaries <span class="font-mono text-fg-dim" x-text="session.trust_boundaries.length ? session.trust_boundaries.join(', ') : 'none'"></span></span>
+	                      <span>Representative <span class="font-mono text-fg-dim" x-text="session.representative_probe_id || '-'"></span></span>
+                    </div>
+
+                    <div class="flex items-center gap-2 mt-3">
+                      <button @click="focusAttackSession(session.session_id)" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover transition-colors">
+                        Filter findings
+                      </button>
+	                      <button @click="inspectAttackSession(session)" class="text-[10px] px-2 py-1 rounded border border-info/20 text-info hover:bg-info/10 transition-colors">
+	                        Open trace
+	                      </button>
+	                    </div>
+	                  </div>
+	                </template>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 mt-4 flex-wrap">
+              <select x-model="investigationFilter.status" @change="setInvestigationPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+                <option value="open">Open findings</option>
+                <option value="all">All findings</option>
+                <option value="needs_review">Needs review</option>
+                <option value="acknowledged">Acknowledged</option>
+                <option value="accepted_risk">Accepted risk</option>
+                <option value="closed">Closed</option>
+                <option value="fixed">Fixed</option>
+                <option value="false_positive">False positive</option>
+              </select>
+              <select x-model="investigationFilter.severity" @change="setInvestigationPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+                <option value="">All severity</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+              <select x-model="investigationFilter.probe" @change="setInvestigationPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+                <option value="">All probes</option>
+                <template x-for="p in uniqueProbes" :key="'investigate-'+p"><option :value="p" x-text="p"></option></template>
+              </select>
+              <select x-show="attackSessions.length" x-model="investigationFilter.session" @change="setInvestigationPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+                <option value="">All sessions</option>
+                <template x-for="session in attackSessions" :key="'session-filter-'+session.session_id">
+                  <option :value="session.session_id" x-text="session.session_id"></option>
+                </template>
+              </select>
+              <input x-model.debounce.150ms="investigationFilter.search" @input="setInvestigationPage(1)" type="text" placeholder="Search findings..." class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1 w-48">
+              <select x-model.number="investigationPageSize" @change="setInvestigationPage(1)" class="bg-bg-input border border-bg-border text-fg-dim text-[10px] rounded px-1.5 py-1">
+                <option :value="12">12</option>
+                <option :value="24">24</option>
+                <option :value="48">48</option>
+              </select>
+              <button @click="setInvestigationPage(investigationCurrentPage-1)" :disabled="investigationCurrentPage<=1" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed">Prev</button>
+              <span class="text-[10px] text-fg-dimmer font-mono" x-text="investigationCurrentPage+'/'+investigationPageCount"></span>
+              <button @click="setInvestigationPage(investigationCurrentPage+1)" :disabled="investigationCurrentPage>=investigationPageCount" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed">Next</button>
+              <button @click="page='eval'" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover transition-colors">
+                Back to Evaluate
+              </button>
+              <span class="text-[10px] text-fg-dimmer ml-auto" x-text="investigationResults.length+'/'+allFindings.length"></span>
+            </div>
+          </div>
+
+          <div class="flex-1 overflow-y-auto p-4">
+            <div x-show="allFindings.length===0" class="text-fg-dimmer text-center py-16 text-sm">
+              No failing findings in this run.
+            </div>
+            <div x-show="allFindings.length>0&&investigationResults.length===0" class="text-fg-dimmer text-center py-16 text-sm">
+              No findings match the current filters.
+            </div>
+            <div class="space-y-3" x-show="investigationResults.length>0">
+              <template x-for="(finding, idx) in pagedInvestigationResults" :key="finding.finding_key || (finding.probe_id+'-'+finding.case_id+'-'+idx+'-'+investigationCurrentPage)">
+                <div class="bg-bg-card border border-bg-border rounded">
+                  <div class="px-4 py-4 flex items-start justify-between gap-4">
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2 flex-wrap mb-2">
+                        <span class="text-[10px] px-1 py-0.5 rounded" :class="sevBadgeClass(finding.severity)" x-text="finding.severity"></span>
+                        <span class="text-[10px] px-1 py-0.5 rounded" :class="triageBadgeClass(triageStatusValue(finding))" x-text="triageStatusLabel(finding)"></span>
+                        <span class="text-[10px] px-1 py-0.5 rounded" :class="findingStateClass(finding)" x-text="findingStateLabel(finding)"></span>
+                        <span class="text-[10px] font-mono text-info" x-text="finding.probe_id"></span>
+                        <span class="text-[10px] font-mono text-fg-dimmer" x-text="finding.case_id"></span>
+                        <span x-show="findingSessionId(finding)" class="text-[10px] px-1 py-0.5 rounded bg-info/10 text-info font-mono" x-text="findingSessionId(finding)"></span>
+                      </div>
+
+                      <div class="text-sm font-semibold text-fg" x-text="finding.probe_id.replace(/_/g,' ')"></div>
+                      <div class="text-[11px] text-fg-dim mt-1" x-text="findingSummary(finding)"></div>
+
+                      <div class="grid md:grid-cols-2 gap-3 mt-3">
+                        <div class="bg-bg border border-bg-border rounded p-3">
+                          <div class="text-[10px] text-fg-dimmer uppercase tracking-wider mb-1">Attack Prompt</div>
+                          <pre class="text-[11px] text-fg-dim max-h-24 overflow-auto" x-text="truncateText(finding.input_text||'(empty)', 220)"></pre>
+                        </div>
+                        <div class="bg-bg border border-bg-border rounded p-3">
+                          <div class="text-[10px] text-fg-dimmer uppercase tracking-wider mb-1">Observed Impact</div>
+                          <pre class="text-[11px] text-fail max-h-24 overflow-auto" x-text="truncateText(finding.response_text||'(empty)', 220)"></pre>
+                        </div>
+                      </div>
+
+                      <div class="flex items-center gap-4 flex-wrap mt-3 text-[10px] text-fg-dimmer">
+                        <span>Owner <span class="font-mono text-fg-dim" x-text="findingOwner(finding)"></span></span>
+                        <span>Detections <span class="font-mono text-fg-dim" x-text="countTriggeredDetections(finding)"></span></span>
+                        <span>Last seen <span class="font-mono text-fg-dim" x-text="findingLastSeenLabel(finding)"></span></span>
+                        <span x-show="finding.triage?.note">Note <span class="font-mono text-fg-dim" x-text="truncateText(finding.triage.note, 80)"></span></span>
+                      </div>
+                    </div>
+
+                    <div class="flex flex-col items-end gap-2 flex-shrink-0">
+                      <div class="text-right text-[10px] text-fg-dimmer">
+                        <div>Score <span class="font-mono text-fg" x-text="finding.score.toFixed(2)"></span></div>
+                        <div>Confidence <span class="font-mono text-fg" x-text="finding.confidence.toFixed(2)"></span></div>
+                      </div>
+                      <button @click="openTraceInspector(finding)" class="text-[11px] px-3 py-1.5 rounded border border-info/20 text-info hover:bg-info/10 transition-colors">
+                        Open Trace
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- ==================== PROBES PAGE ==================== -->
+<div x-show="page==='probes'" class="flex-1 overflow-y-auto p-6" style="max-height:calc(100vh - 40px)">
+  <h2 class="text-sm font-semibold text-fg mb-4">Security Probes</h2>
+  <template x-for="family in probeFamilies" :key="family">
+    <div class="mb-6">
+      <h3 class="text-[10px] text-fg-dimmer uppercase tracking-wider mb-2 font-semibold" x-text="family.replace(/_/g,' ')"></h3>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        <template x-for="probe in probes.filter(p=>p.family===family)" :key="probe.id">
+          <div class="bg-bg-card border border-bg-border rounded p-3">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-mono text-xs text-info" x-text="probe.id"></span>
+              <span class="text-[10px] px-1 py-0.5 rounded" :class="sevBadgeClass(probe.severity)" x-text="probe.severity"></span>
+            </div>
+            <p class="text-[11px] text-fg-dim mb-1 line-clamp-2" x-text="probe.description"></p>
+            <span class="text-[10px] text-fg-dimmer" x-text="probe.seed_count+' seeds'"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+  <div x-show="suites.length>0">
+    <h2 class="text-sm font-semibold text-fg mb-3 mt-6 pt-4 border-t border-bg-border">Suites</h2>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+      <template x-for="suite in suites" :key="suite.name">
+        <div class="bg-bg-card border border-bg-border rounded p-3">
+          <h3 class="text-xs font-semibold text-fg capitalize mb-1" x-text="suite.name"></h3>
+          <p class="text-[11px] text-fg-dim mb-1" x-text="suite.description"></p>
+          <div class="flex gap-1 flex-wrap"><template x-for="p in suite.probes" :key="p.id"><span class="text-[9px] px-1 py-0.5 rounded bg-bg-hover text-fg-dimmer font-mono" x-text="p.id"></span></template></div>
+        </div>
+      </template>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== COMPARE PAGE ==================== -->
+<div x-show="page==='compare'" class="flex-1 overflow-y-auto p-6" style="max-height:calc(100vh - 40px)">
+  <h2 class="text-sm font-semibold text-fg mb-4">Compare Runs</h2>
+  <div x-show="runs.length<2" class="text-fg-dimmer text-center py-12 text-sm">Need at least two runs.</div>
+  <div x-show="runs.length>=2">
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div>
+        <label class="text-[10px] text-fg-dimmer uppercase tracking-wider mb-1 block font-semibold">Baseline</label>
+        <select x-model="compareA" @change="loadComparison()" class="w-full bg-bg-input border border-bg-border text-fg-dim text-xs rounded px-2 py-1.5">
+          <option value="">Select...</option>
+          <template x-for="run in runs" :key="'a-'+run.run_id"><option :value="run.run_id" x-text="run.run_id.slice(0,8)+' — '+formatDate(run.timestamp)+' ('+run.passed+'P/'+run.failed+'F)'"></option></template>
+        </select>
+      </div>
+      <div>
+        <label class="text-[10px] text-fg-dimmer uppercase tracking-wider mb-1 block font-semibold">Compare</label>
+        <select x-model="compareB" @change="loadComparison()" class="w-full bg-bg-input border border-bg-border text-fg-dim text-xs rounded px-2 py-1.5">
+          <option value="">Select...</option>
+          <template x-for="run in runs" :key="'b-'+run.run_id"><option :value="run.run_id" x-text="run.run_id.slice(0,8)+' — '+formatDate(run.timestamp)+' ('+run.passed+'P/'+run.failed+'F)'"></option></template>
+        </select>
+      </div>
+    </div>
+    <template x-if="comparison">
+      <div class="space-y-4">
+        <div class="grid grid-cols-5 gap-2">
+          <div class="bg-bg-card border border-fail/20 rounded p-3 text-center"><div class="text-xl font-bold text-fail" x-text="comparison.regressions"></div><div class="text-[10px] text-fg-dimmer">Regressions</div></div>
+          <div class="bg-bg-card border border-pass/20 rounded p-3 text-center"><div class="text-xl font-bold text-pass" x-text="comparison.improvements"></div><div class="text-[10px] text-fg-dimmer">Resolved</div></div>
+          <div class="bg-bg-card border border-warn/20 rounded p-3 text-center"><div class="text-xl font-bold text-warn" x-text="comparison.persistent_failures.length"></div><div class="text-[10px] text-fg-dimmer">Persistent</div></div>
+          <div class="bg-bg-card border border-info/20 rounded p-3 text-center"><div class="text-xl font-bold text-info" x-text="comparison.persistent_passes?comparison.persistent_passes.length:0"></div><div class="text-[10px] text-fg-dimmer">Stable</div></div>
+          <div class="bg-bg-card border border-bg-border rounded p-3 text-center"><div class="text-xl font-bold text-fg-dim" x-text="comparison.skipped.length"></div><div class="text-[10px] text-fg-dimmer">Skipped</div></div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-bg-card border border-bg-border rounded p-3">
+            <div class="text-[10px] text-fg-dimmer uppercase mb-1 font-semibold">Baseline</div>
+            <span class="text-lg font-bold text-fg" x-text="fmtPct(comparison.summary.base_pass_rate)"></span>
+            <span class="text-xs text-fg-dimmer ml-2" x-text="comparison.summary.base_passed+'P / '+comparison.summary.base_failed+'F'"></span>
+          </div>
+          <div class="bg-bg-card border border-bg-border rounded p-3">
+            <div class="text-[10px] text-fg-dimmer uppercase mb-1 font-semibold">Compare</div>
+            <span class="text-lg font-bold text-fg" x-text="fmtPct(comparison.summary.compare_pass_rate)"></span>
+            <span class="text-xs text-fg-dimmer ml-2" x-text="comparison.summary.compare_passed+'P / '+comparison.summary.compare_failed+'F'"></span>
+          </div>
+        </div>
+        <template x-for="section in comparisonSections" :key="section.key">
+          <div x-show="section.items.length>0" class="border rounded overflow-hidden" :class="section.borderClass">
+            <div class="px-3 py-1.5 text-xs font-semibold flex items-center gap-2" :class="section.headerClass">
+              <span x-text="section.label"></span><span class="text-[10px] font-mono" x-text="'('+section.items.length+')'"></span>
+            </div>
+            <div class="divide-y divide-bg-border/50">
+              <template x-for="item in section.items" :key="section.key+'-'+item.probe_id+'-'+item.case_id">
+                <div class="grid grid-cols-12 text-[11px] px-3 py-1.5 hover:bg-bg-hover">
+                  <div class="col-span-2 font-mono text-info" x-text="item.probe_id.replace(/_/g,' ')"></div>
+                  <div class="col-span-5 text-fg-dim truncate" x-text="item.input_text"></div>
+                  <div class="col-span-5 truncate" :class="item.passed?'text-fg-dimmer':'text-fail'" x-text="item.response_text"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+    </template>
+  </div>
+</div>
+
+<!-- ==================== ATTACK TRACE DRAWER ==================== -->
+<div x-show="tracePanelOpen" x-transition.opacity class="fixed inset-0 z-40 bg-black/60" @click.self="closeTraceInspector()">
+  <template x-if="inspectedResult">
+    <div class="absolute inset-y-0 right-0 w-full max-w-3xl bg-bg-card border-l border-bg-border shadow-2xl flex flex-col">
+      <div class="px-4 py-3 border-b border-bg-border flex items-start justify-between gap-4">
+        <div>
+          <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+            <span class="text-[10px] font-bold px-1.5 py-0.5 rounded" :class="inspectedResult.passed?'bg-pass/15 text-pass':'bg-fail/15 text-fail'" x-text="inspectedResult.passed?'PASS':'FAIL'"></span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded" :class="sevBadgeClass(inspectedResult.severity)" x-text="inspectedResult.severity"></span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-bg-hover text-fg-dim uppercase tracking-wider" x-text="traceStatusLabel(inspectedResult)"></span>
+          </div>
+          <h2 class="text-sm font-semibold text-fg">Attack Trace</h2>
+          <div class="flex items-center gap-3 mt-1 text-[10px] text-fg-dimmer flex-wrap">
+            <span class="font-mono text-info" x-text="inspectedResult.probe_id"></span>
+            <span>case <span class="font-mono" x-text="inspectedResult.case_id"></span></span>
+            <span>confidence <span class="font-mono" x-text="inspectedResult.confidence.toFixed(2)"></span></span>
+            <span>score <span class="font-mono" x-text="inspectedResult.score.toFixed(2)"></span></span>
+          </div>
+        </div>
+        <button @click="closeTraceInspector()" class="text-fg-dim hover:text-fg text-xs border border-bg-border rounded px-2 py-1">Close</button>
+      </div>
+
+	      <div class="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+	        <div class="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          <div class="bg-bg border border-bg-border rounded p-3">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Detector Hits</div>
+            <div class="mt-1 text-lg font-semibold text-fg" x-text="countTriggeredDetections(inspectedResult)"></div>
+            <div class="text-[10px] text-fg-dimmer" x-text="getDetections(inspectedResult).length + ' evaluated'"></div>
+          </div>
+          <div class="bg-bg border border-bg-border rounded p-3">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Generator</div>
+            <div class="mt-1 text-sm font-semibold text-info capitalize" x-text="getTraceGenerator(inspectedResult)"></div>
+            <div class="text-[10px] text-fg-dimmer" x-text="traceChainText(inspectedResult)"></div>
+          </div>
+          <div class="bg-bg border border-bg-border rounded p-3">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Runtime</div>
+            <div class="mt-1 text-sm font-semibold text-fg" x-text="getTraceLatency(inspectedResult)||'-'"></div>
+            <div class="text-[10px] text-fg-dimmer" x-text="getTraceTokens(inspectedResult)||'no token data'"></div>
+          </div>
+	          <div class="bg-bg border border-bg-border rounded p-3">
+	            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider">Model</div>
+	            <div class="mt-1 text-sm font-semibold text-fg" x-text="resultTargetLabel(inspectedResult) || 'not captured'"></div>
+	            <div class="text-[10px] text-fg-dimmer" x-text="(runTargetType() || 'unknown') + ' target'"></div>
+	            <div class="text-[10px] text-fg-dimmer" x-text="traceJudgeCount(inspectedResult) + ' judge evals'"></div>
+	          </div>
+	        </div>
+
+	          <div class="flex items-center gap-2 flex-wrap">
+	            <button @click="navigateFinding(-1)" :disabled="!hasPreviousFinding()" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed">Previous Failure</button>
+	            <button @click="navigateFinding(1)" :disabled="!hasNextFinding()" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed">Next Failure</button>
+	            <button @click="openCompareWithPrevious()" :disabled="!hasPreviousRun()" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover disabled:opacity-40 disabled:cursor-not-allowed">Compare Previous Run</button>
+	            <button @click="copyInspectedFindingKey()" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover">Copy Finding Key</button>
+	          </div>
+
+
+          <div x-show="missingMetadataWarnings().length" class="bg-bg border border-warn/20 rounded p-3">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Missing Metadata</div>
+            <div class="space-y-1 mt-2">
+              <template x-for="warning in missingMetadataWarnings()" :key="'drawer-meta-warning-'+warning">
+                <div class="text-[11px] text-fg-dim" x-text="warning"></div>
+              </template>
+            </div>
+          </div>
+
+	        <div class="bg-bg border border-bg-border rounded p-4">
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Finding Triage</div>
+              <div class="text-[11px] text-fg-dim mt-1">
+                Finding <span class="font-mono" x-text="inspectedResult.finding_key || (inspectedResult.probe_id + ':' + inspectedResult.case_id)"></span>
+              </div>
+            </div>
+            <span class="text-[10px] px-1.5 py-0.5 rounded" :class="triageBadgeClass(triageStatusValue(inspectedResult))" x-text="triageStatusLabel(inspectedResult)"></span>
+          </div>
+
+          <div class="flex flex-wrap gap-2 mb-3">
+            <template x-for="status in triageStatuses" :key="'triage-pill-'+status">
+              <button
+                @click="triageDraft.status = status"
+                type="button"
+                class="text-[10px] px-2 py-1 rounded border transition-colors"
+                :class="triageDraft.status===status ? triageBadgeClass(status)+' border-transparent' : 'border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover'">
+                <span x-text="prettyKey(status)"></span>
+              </button>
+            </template>
+          </div>
+
+          <div class="grid lg:grid-cols-3 gap-3">
+            <div class="lg:col-span-1">
+              <label class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-1 block">Status</label>
+              <select x-model="triageDraft.status" class="w-full bg-bg-input border border-bg-border text-fg-dim text-xs rounded px-2 py-1.5">
+                <option value="">Untriaged</option>
+                <template x-for="status in triageStatuses" :key="'triage-select-'+status">
+                  <option :value="status" x-text="prettyKey(status)"></option>
+                </template>
+              </select>
+            </div>
+            <div class="lg:col-span-1">
+              <label class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-1 block">Owner</label>
+              <input x-model="triageDraft.owner" type="text" placeholder="security-oncall" class="w-full bg-bg-input border border-bg-border text-fg-dim text-xs rounded px-2 py-1.5">
+            </div>
+            <div class="lg:col-span-1">
+              <label class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-1 block">Seen</label>
+              <div class="bg-bg-card border border-bg-border rounded px-2 py-1.5 text-[10px] text-fg-dim space-y-1">
+                <div>First: <span class="font-mono" x-text="inspectedResult.triage?.first_seen ? formatDate(inspectedResult.triage.first_seen) : '-'"></span></div>
+                <div>Last: <span class="font-mono" x-text="inspectedResult.triage?.last_seen ? formatDate(inspectedResult.triage.last_seen) : '-'"></span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <label class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-1 block">Note</label>
+            <textarea x-model="triageDraft.note" rows="3" placeholder="What changed, owner context, or remediation plan" class="w-full bg-bg-input border border-bg-border text-fg-dim text-xs rounded px-2 py-1.5"></textarea>
+          </div>
+
+          <div class="mt-3 flex items-center justify-between gap-3">
+            <div class="text-[10px] text-fg-dimmer">
+              Updated <span class="font-mono" x-text="inspectedResult.triage?.updated_at ? formatDate(inspectedResult.triage.updated_at) : '-'"></span>
+            </div>
+            <button
+              @click="saveTriage()"
+              :disabled="triageSaving"
+              class="text-[11px] px-3 py-1.5 rounded border border-info/20 text-info hover:bg-info/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+              <span x-text="triageSaving ? 'Saving...' : 'Save Triage'"></span>
+            </button>
+          </div>
+        </div>
+
+
+        <div class="bg-bg border border-bg-border rounded p-4">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Attack Timeline</div>
+            <div class="text-[10px] text-fg-dimmer" x-text="currentRun ? currentRun.run_id : ''"></div>
+          </div>
+          <div class="space-y-4">
+            <div class="trace-step pl-6">
+              <div class="absolute left-0 top-0 w-3.5 h-3.5 rounded-full bg-info/20 border border-info/40"></div>
+              <div class="text-[11px] font-semibold text-info uppercase tracking-wider mb-1">Intent</div>
+              <div class="text-[11px] text-fg-dim" x-show="getTraceOriginalInput(inspectedResult)" x-text="getTraceOriginalInput(inspectedResult)"></div>
+              <div class="text-[11px] text-fg-dimmer italic" x-show="!getTraceOriginalInput(inspectedResult)">No pre-transform seed recorded</div>
+            </div>
+            <div class="trace-step pl-6">
+              <div class="absolute left-0 top-0 w-3.5 h-3.5 rounded-full bg-warn/20 border border-warn/40"></div>
+              <div class="text-[11px] font-semibold text-warn uppercase tracking-wider mb-1">Delivered Prompt</div>
+              <pre class="text-[11px] text-fg bg-bg-card border border-bg-border rounded p-3 max-h-36 overflow-auto" x-text="inspectedResult.input_text||'(empty)'"></pre>
+              <div class="mt-2 text-[10px] text-fg-dimmer" x-show="traceExecutedPrompt(inspectedResult)">
+                Executed prompt wrapper
+              </div>
+              <pre x-show="traceExecutedPrompt(inspectedResult)" class="mt-1 text-[10px] text-fg-dim bg-bg-card border border-bg-border rounded p-3 max-h-24 overflow-auto" x-text="traceExecutedPrompt(inspectedResult)"></pre>
+            </div>
+            <div class="trace-step pl-6">
+              <div class="absolute left-0 top-0 w-3.5 h-3.5 rounded-full border" :class="inspectedResult.passed?'bg-pass/20 border-pass/40':'bg-fail/20 border-fail/40'"></div>
+              <div class="text-[11px] font-semibold uppercase tracking-wider mb-1" :class="inspectedResult.passed?'text-pass':'text-fail'">Model Response</div>
+              <pre class="text-[11px] bg-bg-card border border-bg-border rounded p-3 max-h-36 overflow-auto" :class="inspectedResult.passed?'text-fg-dim':'text-fail'" x-text="inspectedResult.response_text||'(empty)'"></pre>
+            </div>
+          </div>
+        </div>
+
+        <div x-show="traceConversation(inspectedResult).length" class="bg-bg border border-bg-border rounded p-4">
+          <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-3">Conversation Trace</div>
+          <div class="space-y-2">
+            <template x-for="(turn, idx) in traceConversation(inspectedResult)" :key="'turn-'+idx">
+              <div class="rounded border border-bg-border bg-bg-card p-3">
+                <div class="text-[10px] uppercase tracking-wider mb-1" :class="turn.role==='user'?'text-info':'text-warn'" x-text="turn.role"></div>
+                <pre class="text-[11px] text-fg-dim max-h-28 overflow-auto" x-text="turn.content"></pre>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="grid lg:grid-cols-2 gap-4">
+          <div class="bg-bg border border-bg-border rounded p-4">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-3">Detector Outcomes</div>
+            <div class="space-y-2" x-show="getDetections(inspectedResult).length">
+              <template x-for="det in getDetections(inspectedResult)" :key="'drawer-det-'+det.detector">
+                <div class="border border-bg-border bg-bg-card rounded p-3">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-[9px] font-bold px-1 py-0.5 rounded" :class="det.triggered?'bg-fail/15 text-fail':'bg-pass/15 text-pass'" x-text="det.triggered?'TRIGGERED':'CLEAN'"></span>
+                    <span class="font-mono text-[11px] text-fg-dim" x-text="det.detector"></span>
+                    <span class="ml-auto text-[10px] text-fg-dimmer font-mono" x-text="det.score!==undefined?det.score.toFixed(2):''"></span>
+                  </div>
+                  <div class="text-[10px] text-fg-dim" x-show="det.evidence?.explanation" x-text="det.evidence?.explanation"></div>
+                  <pre x-show="det.evidence && Object.keys(det.evidence).length" class="mt-2 text-[10px] text-fg-dimmer bg-bg rounded p-2 max-h-24 overflow-auto" x-text="JSON.stringify(det.evidence, null, 2)"></pre>
+                </div>
+              </template>
+            </div>
+            <div class="text-[11px] text-fg-dimmer italic" x-show="!getDetections(inspectedResult).length">No detector evidence captured</div>
+          </div>
+
+          <div class="bg-bg border border-bg-border rounded p-4">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-3">Judge Evaluations</div>
+            <div class="space-y-2" x-show="traceJudgeEvaluations(inspectedResult).length">
+              <template x-for="(judge, idx) in traceJudgeEvaluations(inspectedResult)" :key="'judge-'+idx">
+                <div class="border border-bg-border bg-bg-card rounded p-3">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-[9px] font-bold px-1 py-0.5 rounded bg-info/15 text-info" x-text="judge.detector||'judge'"></span>
+                    <span class="text-[10px] text-fg-dimmer" x-text="judge.provider?.model || judge.provider?.name || 'unknown model'"></span>
+                    <span class="ml-auto text-[10px] font-mono" :class="judge.verdict ? 'text-fail' : 'text-fg-dimmer'" x-text="judge.verdict || 'scored'"></span>
+                  </div>
+                  <div class="text-[11px] text-fg-dim" x-show="judge.explanation" x-text="judge.explanation"></div>
+                  <pre x-show="judge.prompt" class="mt-2 text-[10px] text-fg-dimmer bg-bg rounded p-2 max-h-24 overflow-auto" x-text="judge.prompt"></pre>
+                </div>
+              </template>
+            </div>
+            <div class="text-[11px] text-fg-dimmer italic" x-show="!traceJudgeEvaluations(inspectedResult).length">No judge trace captured</div>
+          </div>
+        </div>
+
+        <div class="grid lg:grid-cols-2 gap-4">
+          <div class="bg-bg border border-bg-border rounded p-4">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-3">Context Metadata</div>
+            <div class="space-y-2">
+              <template x-for="entry in traceCaseMetadataEntries(inspectedResult)" :key="'case-meta-'+entry.key">
+                <div class="flex items-start justify-between gap-3 text-[11px] border-b border-bg-border/40 pb-2">
+                  <span class="text-fg-dimmer uppercase tracking-wider text-[10px]" x-text="entry.key"></span>
+                  <span class="text-fg-dim font-mono text-right break-all" x-text="entry.value"></span>
+                </div>
+              </template>
+            </div>
+            <div class="text-[11px] text-fg-dimmer italic" x-show="!traceCaseMetadataEntries(inspectedResult).length">No additional case metadata</div>
+          </div>
+          <div class="bg-bg border border-bg-border rounded p-4">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-3">Response Metadata</div>
+            <div class="space-y-2">
+              <template x-for="entry in traceResponseMetadataEntries(inspectedResult)" :key="'resp-meta-'+entry.key">
+                <div class="flex items-start justify-between gap-3 text-[11px] border-b border-bg-border/40 pb-2">
+                  <span class="text-fg-dimmer uppercase tracking-wider text-[10px]" x-text="entry.key"></span>
+                  <span class="text-fg-dim font-mono text-right break-all" x-text="entry.value"></span>
+                </div>
+              </template>
+            </div>
+            <div class="text-[11px] text-fg-dimmer italic" x-show="!traceResponseMetadataEntries(inspectedResult).length">No additional response metadata</div>
+          </div>
+        </div>
+
+        <div class="grid lg:grid-cols-2 gap-4">
+          <div class="bg-bg border border-bg-border rounded p-4" x-show="inspectedResult.remediation?.length">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-3">Remediation</div>
+            <ul class="space-y-2">
+              <template x-for="step in inspectedResult.remediation" :key="'fix-'+step">
+                <li class="text-[11px] text-fg-dim flex items-start gap-2"><span class="text-info mt-0.5">&#8226;</span><span x-text="step"></span></li>
+              </template>
+            </ul>
+          </div>
+          <div class="bg-bg border border-bg-border rounded p-4">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold mb-3">Evidence Snapshot</div>
+            <pre class="text-[10px] text-fg-dim bg-bg-card border border-bg-border rounded p-3 max-h-48 overflow-auto" x-text="JSON.stringify(inspectedResult.evidence||{}, null, 2)"></pre>
+          </div>
+        </div>
+
+        <div class="bg-bg border border-bg-border rounded p-4">
+          <div class="flex items-center justify-between mb-3">
+            <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Raw Trace</div>
+            <button @click="traceJsonOpen=!traceJsonOpen" class="text-[10px] px-2 py-1 rounded border border-bg-border text-fg-dim hover:text-fg">
+              <span x-text="traceJsonOpen?'Hide':'Show'"></span>
+            </button>
+          </div>
+          <pre x-show="traceJsonOpen" class="text-[10px] text-fg-dim bg-bg-card border border-bg-border rounded p-3 max-h-72 overflow-auto" x-text="JSON.stringify(inspectedResult.trace||{}, null, 2)"></pre>
+          <div x-show="!traceJsonOpen" class="text-[11px] text-fg-dimmer">Expand to inspect the full stored trace payload.</div>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+
+<!-- Delete Run Modal -->
+<div x-show="deleteRunModalOpen" x-transition.opacity class="fixed inset-0 z-50 bg-black/60" @click.self="closeDeleteRunModal()">
+  <div class="min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-md bg-bg-card border border-fail/20 rounded shadow-2xl">
+      <div class="px-4 py-3 border-b border-bg-border">
+        <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Delete Eval</div>
+        <div class="mt-1 text-sm font-semibold text-fg">Remove this saved run?</div>
+      </div>
+      <div class="px-4 py-4 space-y-3">
+        <div class="text-[11px] text-fg-dim">
+          This removes the run from the dashboard list and compare views.
+        </div>
+        <div class="bg-bg border border-bg-border rounded p-3 text-[11px]">
+          <div class="flex items-center justify-between gap-3">
+            <span class="text-fg-dimmer uppercase tracking-wider text-[10px]">Run</span>
+            <span class="font-mono text-info break-all" x-text="deleteRunCandidate?.run_id || ''"></span>
+          </div>
+          <div class="flex items-center justify-between gap-3 mt-2">
+            <span class="text-fg-dimmer uppercase tracking-wider text-[10px]">Timestamp</span>
+            <span class="font-mono text-fg-dim" x-text="deleteRunCandidate?.timestamp ? formatDate(deleteRunCandidate.timestamp) : '-'"></span>
+          </div>
+        </div>
+        <div class="text-[10px] text-fg-dimmer">
+          Current behavior deletes the stored run record. Artifact files under <span class="font-mono">.aegisrt/runs/</span> are not removed by this UI action.
+        </div>
+      </div>
+      <div class="px-4 py-3 border-t border-bg-border flex items-center justify-end gap-2">
+        <button
+          @click="closeDeleteRunModal()"
+          type="button"
+          class="text-[11px] px-3 py-1.5 rounded border border-bg-border text-fg-dim hover:text-fg hover:bg-bg-hover transition-colors">
+          Cancel
+        </button>
+        <button
+          @click="confirmDeleteRun()"
+          :disabled="deleteRunBusy"
+          type="button"
+          class="text-[11px] px-3 py-1.5 rounded border border-fail/20 text-fail hover:bg-fail/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+          <span x-text="deleteRunBusy ? 'Deleting...' : 'Delete Eval'"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toasts -->
+<div class="fixed bottom-4 right-4 z-50 space-y-2">
+  <template x-for="toast in toasts" :key="toast.id">
+    <div x-transition class="px-3 py-2 rounded text-xs border" :class="toast.type==='error'?'bg-fail/10 border-fail/30 text-fail':'bg-pass/10 border-pass/30 text-pass'" x-text="toast.message"></div>
+  </template>
+</div>
+
+</div>
+
+<script>
+function app() {
+  return {
+    page: 'eval',
+    version: '',
+    runs: [],
+    runCache: {},
+    probes: [],
+    suites: [],
+    currentRun: null,
+    runLoading: false,
+    inspectedResult: null,
+    tracePanelOpen: false,
+    traceJsonOpen: false,
+    deleteRunModalOpen: false,
+    deleteRunCandidate: null,
+    deleteRunBusy: false,
+    sessionView: { actor: '', type: '', boundary: '', tool: '', flaggedOnly: false },
+    sessionDerivedMemo: { key: '', value: { filteredSteps: [], annotations: [], graph: { viewBox: '0 0 760 240', nodes: [], edges: [] } } },
+    triageStatuses: ['new', 'acknowledged', 'fixed', 'accepted_risk', 'false_positive'],
+    triageDraft: { status: '', owner: '', note: '' },
+    triageSaving: false,
+    expandedRows: [],
+    toasts: [],
+    detailFilter: { severity: '', status: '', triage: '', probe: '', search: '' },
+    investigationFilter: { status: 'open', severity: '', probe: '', session: '', search: '' },
+    detailPage: 1,
+    detailPageSize: 50,
+    investigationPage: 1,
+    investigationPageSize: 24,
+    comparisonCache: {},
+    compareA: '', compareB: '', comparison: null,
+
+    async init() {
+      await this.fetchHealth();
+      await Promise.all([this.fetchRuns(), this.fetchProbes(), this.fetchSuites()]);
+      // Auto-select latest run
+      if (this.runs.length > 0) {
+        const path = window.location.pathname;
+        if (path.startsWith('/runs/') && path.length > 6) {
+          await this.loadRun(path.substring(6));
+        } else {
+          await this.loadRun(this.runs[0].run_id);
+        }
+      }
+    },
+
+    async selectRun(runId) {
+      const workspacePage = this.page === 'investigate' ? 'investigate' : 'eval';
+      this.expandedRows = [];
+      this.detailFilter = { severity: '', status: '', triage: '', probe: '', search: '' };
+      this.investigationFilter = { status: 'open', severity: '', probe: '', session: '', search: '' };
+      this.detailPage = 1;
+      this.investigationPage = 1;
+      this.closeTraceInspector();
+      this.resetSessionView();
+      this.page = workspacePage;
+      await this.loadRun(runId);
+    },
+
+    // API
+    async fetchHealth() { try { const r = await fetch('/api/health'); const d = await r.json(); this.version = d.version||'?'; } catch { this.version = '?'; } },
+    async fetchRuns() {
+      try {
+        const r = await fetch('/api/runs');
+        this.runs = await r.json();
+        const keep = new Set(this.runs.map(run => run.run_id));
+        for (const runId of Object.keys(this.runCache)) {
+          if (!keep.has(runId)) delete this.runCache[runId];
+        }
+      } catch {
+        this.toast('Failed to load runs','error');
+      }
+    },
+    async fetchProbes() { try { const r = await fetch('/api/probes'); this.probes = await r.json(); } catch {} },
+    async fetchSuites() { try { const r = await fetch('/api/suites'); this.suites = await r.json(); } catch {} },
+    async loadRun(runId, force=false) {
+      if (!runId) return;
+      if (!force && this.runCache[runId]) {
+        this.runLoading = false;
+        this.currentRun = this.runCache[runId];
+        return;
+      }
+      this.runLoading = true;
+      try {
+        const r = await fetch('/api/runs/'+runId);
+        if (!r.ok) throw new Error('Run not found');
+        const payload = await r.json();
+        this.runCache[runId] = payload;
+        this.currentRun = payload;
+      }
+      catch (e) { this.toast('Failed: '+e.message,'error'); }
+      finally { this.runLoading = false; }
+    },
+    async loadComparison() {
+      if (!this.compareA||!this.compareB||this.compareA===this.compareB){this.comparison=null;return}
+      const key = this.compareA+'::'+this.compareB;
+      if (this.comparisonCache[key]) {
+        this.comparison = this.comparisonCache[key];
+        return;
+      }
+      try {
+        const r = await fetch('/api/runs/'+encodeURIComponent(this.compareA)+'/diff/'+encodeURIComponent(this.compareB));
+        if (!r.ok) throw new Error('Failed');
+        const payload = await r.json();
+        this.comparisonCache[key] = payload;
+        this.comparison = payload;
+      }
+      catch { this.comparison=null; this.toast('Compare failed','error'); }
+    },
+    openDeleteRunModal(run){
+      this.deleteRunCandidate = run || null;
+      this.deleteRunModalOpen = !!run;
+    },
+    closeDeleteRunModal(force=false){
+      if(this.deleteRunBusy && !force){return}
+      this.deleteRunModalOpen = false;
+      this.deleteRunCandidate = null;
+    },
+    async confirmDeleteRun(){
+      const runId = this.deleteRunCandidate?.run_id;
+      if(!runId || this.deleteRunBusy){return}
+      this.deleteRunBusy = true;
+      try {
+        const response = await fetch('/api/runs/'+encodeURIComponent(runId), { method: 'DELETE' });
+        const payload = await response.json().catch(() => ({}));
+        if(!response.ok){
+          throw new Error(payload.detail || 'Failed to delete run');
+        }
+        const deletedSelectedRun = this.currentRun?.run_id === runId;
+        if(this.compareA === runId){this.compareA = ''}
+        if(this.compareB === runId){this.compareB = ''}
+        delete this.runCache[runId];
+        this.comparisonCache = {};
+        this.comparison = null;
+        await this.fetchRuns();
+        if(deletedSelectedRun){
+          this.currentRun = null;
+          this.expandedRows = [];
+          this.closeTraceInspector();
+          if(this.runs.length > 0){
+            await this.loadRun(this.runs[0].run_id);
+          }
+        }
+        this.closeDeleteRunModal(true);
+        this.toast('Deleted eval ' + runId.slice(0,8));
+      } catch (error) {
+        this.toast(error.message || 'Failed to delete run', 'error');
+      } finally {
+        this.deleteRunBusy = false;
+      }
+    },
+    setDetailPage(page){
+      const maxPage = this.detailPageCount;
+      this.detailPage = Math.max(1, Math.min(page, maxPage));
+      this.expandedRows = [];
+    },
+    setInvestigationPage(page){
+      const maxPage = this.investigationPageCount;
+      this.investigationPage = Math.max(1, Math.min(page, maxPage));
+    },
+    resetSessionView(){
+      this.sessionView = { actor: '', type: '', boundary: '', tool: '', flaggedOnly: false };
+      this.sessionDerivedMemo = { key: '', value: { filteredSteps: [], annotations: [], graph: { viewBox: '0 0 760 240', nodes: [], edges: [] } } };
+    },
+    previousRunId(runId=this.currentRun?.run_id){
+      if(!runId){return ''}
+      const index = this.runs.findIndex(run => run.run_id === runId);
+      if(index < 0 || index >= this.runs.length - 1){return ''}
+      return this.runs[index + 1]?.run_id || '';
+    },
+    hasPreviousRun(){
+      return !!this.previousRunId();
+    },
+    async openCompareWithPrevious(){
+      const previousRunId = this.previousRunId();
+      if(!previousRunId || !this.currentRun){
+        this.toast('No previous run available','error');
+        return;
+      }
+      this.compareA = previousRunId;
+      this.compareB = this.currentRun.run_id;
+      this.page = 'compare';
+      await this.loadComparison();
+    },
+    async copyText(value, label='Value'){
+      if(!value){
+        this.toast(label + ' unavailable','error');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(value);
+        this.toast(label + ' copied');
+      } catch {
+        this.toast('Copy failed', 'error');
+      }
+    },
+    copyCurrentRunId(){
+      this.copyText(this.currentRun?.run_id || '', 'Run ID');
+    },
+    copyInspectedFindingKey(){
+      if(!this.inspectedResult){return}
+      this.copyText(this.inspectedResult.finding_key || (this.inspectedResult.probe_id + ':' + this.inspectedResult.case_id), 'Finding key');
+    },
+    missingMetadataWarnings(){
+      if(!this.currentRun){return []}
+      const warnings = [];
+      if(!this.runTargetLabel()){
+        if(this.runTargetType() === 'callback'){
+          warnings.push('Target model not captured for this callback run. Declare target.params.model or return TargetResponse.metadata.model from the callback.');
+        } else {
+          warnings.push('Target model was not recorded for this run.');
+        }
+      }
+      if(this.currentRun?.config?.providers?.judge && !this.runJudgeModel()){
+        warnings.push('Judge provider is configured, but the judge model was not recorded.');
+      }
+      if(this.currentRun?.config?.providers?.attacker && !this.runAttackerModel()){
+        warnings.push('Attacker provider is configured, but the attacker model was not recorded.');
+      }
+      return warnings;
+    },
+    findingNavigationList(){
+      return this.allFindings;
+    },
+    findingNavigationIndex(){
+      if(!this.inspectedResult){return -1}
+      const key = this.inspectedResult.finding_key || (this.inspectedResult.probe_id + ':' + this.inspectedResult.case_id);
+      return this.findingNavigationList().findIndex(item => (item.finding_key || (item.probe_id + ':' + item.case_id)) === key);
+    },
+    hasPreviousFinding(){
+      return this.findingNavigationIndex() > 0;
+    },
+    hasNextFinding(){
+      const index = this.findingNavigationIndex();
+      return index >= 0 && index < this.findingNavigationList().length - 1;
+    },
+    navigateFinding(offset){
+      const index = this.findingNavigationIndex();
+      if(index < 0){return}
+      const next = this.findingNavigationList()[index + offset];
+      if(next){
+        this.openTraceInspector(next);
+      }
+    },
+
+    // Computed
+    get filteredResults() {
+      if (!this.currentRun) return [];
+      let res = this.currentRun.results;
+      if (this.detailFilter.severity) res = res.filter(r => r.severity===this.detailFilter.severity);
+      if (this.detailFilter.status==='passed') res = res.filter(r => r.passed);
+      else if (this.detailFilter.status==='failed') res = res.filter(r => !r.passed);
+      if (this.detailFilter.triage==='untriaged') res = res.filter(r => !this.triageStatusValue(r));
+      else if (this.detailFilter.triage) res = res.filter(r => this.triageStatusValue(r)===this.detailFilter.triage);
+      if (this.detailFilter.probe) res = res.filter(r => r.probe_id===this.detailFilter.probe);
+      if (this.detailFilter.search) { const q = this.detailFilter.search.toLowerCase(); res = res.filter(r => (r.input_text||'').toLowerCase().includes(q)||(r.response_text||'').toLowerCase().includes(q)); }
+      return res;
+    },
+    get allFindings() {
+      if (!this.currentRun) return [];
+      return this.currentRun.results
+        .filter(r => !r.passed && !r.evidence?.skipped)
+        .slice()
+        .sort((a, b) => this.severityRank(b.severity) - this.severityRank(a.severity) || b.score - a.score);
+    },
+    get detailPageCount() {
+      return Math.max(1, Math.ceil(this.filteredResults.length / this.detailPageSize));
+    },
+    get detailCurrentPage() {
+      return Math.min(Math.max(this.detailPage, 1), this.detailPageCount);
+    },
+    get pagedFilteredResults() {
+      const start = (this.detailCurrentPage - 1) * this.detailPageSize;
+      return this.filteredResults.slice(start, start + this.detailPageSize);
+    },
+    get attackSessions() {
+      return this.currentRun?.attack_sessions || [];
+    },
+    get attackSessionSummary() {
+      const sessions = this.attackSessions;
+      return {
+        total: sessions.length,
+        multiStep: sessions.filter(s => (s.step_count || 0) > 1).length,
+        withTools: sessions.filter(s => (s.tool_names || []).length > 0).length,
+        crossBoundary: sessions.filter(s => s.cross_boundary).length,
+      };
+    },
+    get investigationResults() {
+      let res = this.allFindings.slice();
+      if (this.investigationFilter.status === 'open') {
+        res = res.filter(r => !this.isClosedTriageStatus(this.triageStatusValue(r)));
+      } else if (this.investigationFilter.status === 'needs_review') {
+        res = res.filter(r => {
+          const status = this.triageStatusValue(r);
+          return !status || status === 'new';
+        });
+      } else if (this.investigationFilter.status === 'closed') {
+        res = res.filter(r => this.isClosedTriageStatus(this.triageStatusValue(r)));
+      } else if (this.investigationFilter.status !== 'all' && this.investigationFilter.status) {
+        res = res.filter(r => this.triageStatusValue(r) === this.investigationFilter.status);
+      }
+      if (this.investigationFilter.severity) res = res.filter(r => r.severity === this.investigationFilter.severity);
+      if (this.investigationFilter.probe) res = res.filter(r => r.probe_id === this.investigationFilter.probe);
+      if (this.investigationFilter.session) res = res.filter(r => this.findingSessionId(r) === this.investigationFilter.session);
+      if (this.investigationFilter.search) {
+        const q = this.investigationFilter.search.toLowerCase();
+        res = res.filter(r =>
+          (r.probe_id || '').toLowerCase().includes(q) ||
+          (r.case_id || '').toLowerCase().includes(q) ||
+          (r.input_text || '').toLowerCase().includes(q) ||
+          (r.response_text || '').toLowerCase().includes(q) ||
+          (r.triage?.owner || '').toLowerCase().includes(q) ||
+          (r.triage?.note || '').toLowerCase().includes(q) ||
+          this.gradingSummary(r).toLowerCase().includes(q)
+        );
+      }
+      return res;
+    },
+    get investigationPageCount() {
+      return Math.max(1, Math.ceil(this.investigationResults.length / this.investigationPageSize));
+    },
+    get investigationCurrentPage() {
+      return Math.min(Math.max(this.investigationPage, 1), this.investigationPageCount);
+    },
+    get pagedInvestigationResults() {
+      const start = (this.investigationCurrentPage - 1) * this.investigationPageSize;
+      return this.investigationResults.slice(start, start + this.investigationPageSize);
+    },
+    get investigationSummary() {
+      const findings = this.allFindings;
+      const open = findings.filter(r => !this.isClosedTriageStatus(this.triageStatusValue(r))).length;
+      const needsReview = findings.filter(r => {
+        const status = this.triageStatusValue(r);
+        return !status || status === 'new';
+      }).length;
+      const criticalHigh = findings.filter(r => ['critical', 'high'].includes(r.severity)).length;
+      const closed = findings.filter(r => this.isClosedTriageStatus(this.triageStatusValue(r))).length;
+      return { open, needsReview, criticalHigh, closed };
+    },
+    get uniqueProbes() { return this.currentRun ? [...new Set(this.currentRun.results.map(r=>r.probe_id))].sort() : []; },
+    get probeFamilies() { return [...new Set(this.probes.map(p=>p.family))].sort(); },
+    get runSummary() {
+      if (!this.currentRun) return {total:0,passed:0,failed:0,passRate:'-',passRateNum:0,duration:'-'};
+      const s = this.currentRun.summary||{};
+      const total = s.total||this.currentRun.results.length;
+      const passed = s.passed??this.currentRun.results.filter(r=>r.passed).length;
+      const failed = s.failed??this.currentRun.results.filter(r=>!r.passed).length;
+      const pr = (passed+failed)>0?((passed/(passed+failed))*100):100;
+      const dur = s.duration_seconds;
+      return {total,passed,failed,passRate:pr.toFixed(1),passRateNum:pr,duration:dur?(dur<60?dur.toFixed(1)+'s':(dur/60).toFixed(1)+'m'):'-'};
+    },
+    get probeBreakdown() {
+      if (!this.currentRun) return [];
+      const map={};
+      for (const r of this.currentRun.results){if(!map[r.probe_id])map[r.probe_id]={total:0,passed:0,failed:0};map[r.probe_id].total++;r.passed?map[r.probe_id].passed++:map[r.probe_id].failed++}
+      return Object.entries(map).sort((a,b)=>b[1].failed-a[1].failed||a[0].localeCompare(b[0]));
+    },
+    get comparisonSections() {
+      if (!this.comparison) return [];
+      return [
+        {key:'reg',label:'Regressions',items:this.comparison.new_failures||[],borderClass:'border-fail/30',headerClass:'bg-fail/10 text-fail'},
+        {key:'res',label:'Resolved',items:this.comparison.resolved||[],borderClass:'border-pass/30',headerClass:'bg-pass/10 text-pass'},
+        {key:'per',label:'Persistent Failures',items:this.comparison.persistent_failures||[],borderClass:'border-warn/30',headerClass:'bg-warn/10 text-warn'},
+        {key:'new',label:'New Passes',items:this.comparison.new_passes||[],borderClass:'border-info/30',headerClass:'bg-info/10 text-info'},
+      ];
+    },
+
+    // Helpers
+    openTraceInspector(result){this.inspectedResult=result;this.tracePanelOpen=true;this.traceJsonOpen=false;this.resetSessionView();this.syncTriageDraft(result)},
+    closeTraceInspector(){this.tracePanelOpen=false;this.inspectedResult=null;this.traceJsonOpen=false;this.resetSessionView();this.triageDraft={status:'',owner:'',note:''};this.triageSaving=false},
+    toggleRow(idx){const i=this.expandedRows.indexOf(idx);i>=0?this.expandedRows.splice(i,1):this.expandedRows.push(idx)},
+    getPassRate(run){const t=(run.passed||0)+(run.failed||0);return t>0?parseFloat(((run.passed/t)*100).toFixed(1)):100},
+    getSevCount(run,sev){const v=run.summary?.by_severity?.[sev];if(!v)return 0;return typeof v==='object'?(v.failed||0):v},
+    getDetections(result){const ev=result.evidence;if(!ev)return[];if(Array.isArray(ev.detections))return ev.detections;return[]},
+    countTriggeredDetections(result){return this.getDetections(result).filter(x=>x.triggered).length},
+    gradingSummary(result){const d=this.getDetections(result);if(!d.length)return'';const t=d.filter(x=>x.triggered);if(!t.length)return'All clean';return t.map(x=>x.detector.replace(/_/g,' ')).join(', ')},
+    getTraceGenerator(result){return result.trace?.case?.metadata?.generator||'static'},
+    getTraceOriginalInput(result){return result.trace?.case?.metadata?.original_input_text||null},
+    getTraceConverterChain(result){return result.trace?.case?.metadata?.converter_chain||null},
+    getTraceLatency(result){const ms=result.trace?.response?.latency_ms??result.evidence?.response_latency_ms;if(ms==null)return null;return ms>=1000?(ms/1000).toFixed(1)+'s':ms.toFixed(0)+'ms'},
+    getTraceTokens(result){const r=result.trace?.response;if(!r)return null;if(r.prompt_tokens||r.completion_tokens)return(r.prompt_tokens||0)+' in / '+(r.completion_tokens||0)+' out';return null},
+    configuredTargetModel(){
+      if(!this.currentRun){return ''}
+      const target = this.currentRun.config?.target || {};
+      if(target.params?.model){return target.params.model}
+      if(target.body_template?.model){return target.body_template.model}
+      if(target.body_template?.model_name){return target.body_template.model_name}
+      return ''
+    },
+    runTargetType(){
+      return this.currentRun?.config?.target?.type || this.currentRun?.target_info?.type || ''
+    },
+    runTargetEndpoint(){
+      return this.currentRun?.target_info?.url || this.currentRun?.config?.target?.url || ''
+    },
+    runTargetLabel(){
+      if(!this.currentRun){return ''}
+      const configured = this.configuredTargetModel();
+      if(configured){return configured}
+      const fromTargetInfo = this.currentRun.target_info?.model;
+      if(fromTargetInfo){return fromTargetInfo}
+      const observed = this.currentRun.results?.map(result => this.traceModelName(result)).find(Boolean);
+      return observed || ''
+    },
+    runJudgeModel(){
+      if(!this.currentRun){return ''}
+      const fromTargetInfo = this.currentRun.target_info?.judge_model;
+      if(fromTargetInfo){return fromTargetInfo}
+      const configured = this.currentRun.config?.providers?.judge?.model;
+      if(configured){return configured}
+      for(const result of this.currentRun.results || []){
+        const judge = this.traceJudgeEvaluations(result).find(item => item?.provider?.model || item?.provider?.name);
+        if(judge){return judge.provider?.model || judge.provider?.name || ''}
+      }
+      return '';
+    },
+    runAttackerModel(){
+      return this.currentRun?.target_info?.attacker_model || this.currentRun?.config?.providers?.attacker?.model || '';
+    },
+    resultTargetLabel(result){
+      if(!result){return ''}
+      const observed = this.traceModelName(result);
+      if(observed){return observed}
+      return this.runTargetLabel();
+    },
+    traceChainText(result){const chain=this.getTraceConverterChain(result);if(!chain)return'no transforms';if(Array.isArray(chain))return chain.join(' → ');return String(chain)},
+    traceExecutedPrompt(result){return result.trace?.case?.metadata?.executed_prompt||null},
+    traceConversation(result){const turns=result.trace?.case?.metadata?.conversation_trace;return Array.isArray(turns)?turns:[]},
+    traceJudgeEvaluations(result){const judges=result.trace?.judge_evaluations;return Array.isArray(judges)?judges:[]},
+    traceJudgeCount(result){return this.traceJudgeEvaluations(result).length},
+    traceModelName(result){
+      return result.trace?.response?.metadata?.model
+        || result.trace?.response?.metadata?.model_name
+        || '';
+    },
+    traceStatusLabel(result){
+      if (result.evidence?.skipped) return 'runtime skipped';
+      if (result.passed) return 'guardrails held';
+      if (result.confidence >= 0.85) return 'verified exploit path';
+      if (result.confidence >= 0.6) return 'likely exploit path';
+      return 'potential exploit path';
+    },
+    traceMetadataEntries(meta, omitKeys=[]){
+      if(!meta||typeof meta!=='object')return[];
+      return Object.entries(meta)
+        .filter(([key])=>!omitKeys.includes(key))
+        .map(([key,value])=>({key:this.prettyKey(key),value:this.traceValue(value)}));
+    },
+    traceCaseMetadataEntries(result){
+      return this.traceMetadataEntries(result.trace?.case?.metadata||{},['conversation_trace']);
+    },
+    traceResponseMetadataEntries(result){
+      return this.traceMetadataEntries(result.trace?.response?.metadata||{},[]);
+    },
+    traceSessionId(result){
+      if(!result){return ''}
+      const trace = result.trace || {};
+      return trace.session_id
+        || trace.attack_session_id
+        || trace.case?.metadata?.session_id
+        || trace.case?.metadata?.conversation_case_id
+        || ((Array.isArray(trace.steps) && trace.steps.length) ? (result.finding_key || (result.probe_id+':'+result.case_id)) : '')
+        || '';
+    },
+    traceAttackId(result){
+      if(!result){return ''}
+      const trace = result.trace || {};
+      return trace.attack_id || this.traceSessionId(result);
+    },
+    hasRecordedSessionTrace(result){
+      const trace = result?.trace || {};
+      return (Array.isArray(trace.steps) && trace.steps.length > 0) || this.traceConversation(result).length > 0;
+    },
+    syntheticTraceSessionSteps(result){
+      if(!result){return []}
+      const sourceActor = this.getTraceGenerator(result) || 'seed';
+      const targetActor = this.resultTargetLabel(result) || this.runTargetType() || 'target';
+      const steps = [];
+      if(result.input_text || this.getTraceOriginalInput(result)){
+        steps.push({
+          step_id: 'synthetic-prompt',
+          type: 'prompt',
+          agent_role: 'seed',
+          agent_id: sourceActor,
+          content: this.getTraceOriginalInput(result) || result.input_text || '',
+          output: result.input_text || '',
+        });
+      }
+      if(result.response_text || this.gradingSummary(result)){
+        steps.push({
+          step_id: 'synthetic-response',
+          type: 'response',
+          agent_role: 'target',
+          agent_id: targetActor,
+          input: result.input_text || '',
+          output: result.response_text || '',
+          content: this.gradingSummary(result) || this.traceStatusLabel(result),
+        });
+      }
+      if(!steps.length){
+        steps.push({
+          step_id: 'synthetic-impact',
+          type: 'impact',
+          agent_role: 'target',
+          agent_id: targetActor,
+          content: this.traceStatusLabel(result),
+        });
+      }
+      return steps;
+    },
+    traceSessionSteps(result){
+      const trace = result?.trace || {};
+      if(Array.isArray(trace.steps) && trace.steps.length){return trace.steps}
+      const turns = this.traceConversation(result);
+      if(turns.length){
+        return turns.map((turn, idx) => ({
+          step_id: 'turn-'+(idx+1),
+          type: 'message',
+          agent_role: turn.role || 'unknown',
+          agent_id: turn.role || 'unknown',
+          content: turn.content || '',
+        }));
+      }
+      return this.syntheticTraceSessionSteps(result);
+    },
+    traceSessionFilteredSteps(result){
+      return this.sessionDerived(result).filteredSteps;
+    },
+    traceSessionActorOptions(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => this.traceSessionActor(step)).filter(Boolean))];
+    },
+    traceSessionTypeOptions(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => this.traceSessionStepType(step)).filter(Boolean))];
+    },
+    traceSessionBoundaryOptions(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => step.trust_boundary).filter(Boolean))];
+    },
+    traceSessionToolOptions(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => step.tool_name).filter(Boolean))];
+    },
+    traceSessionParticipants(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => this.traceSessionActor(step)).filter(Boolean))];
+    },
+    traceSessionTools(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => step.tool_name).filter(Boolean))];
+    },
+    traceSessionMemoryStores(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => step.memory_store).filter(Boolean))];
+    },
+    traceSessionBoundaries(result){
+      return [...new Set(this.traceSessionSteps(result).map(step => step.trust_boundary).filter(Boolean))];
+    },
+    traceSessionActor(step){
+      return step?.agent_id || step?.agent_role || step?.role || 'unknown';
+    },
+    traceSessionStepType(step){
+      return step?.type || step?.step_type || 'message';
+    },
+    traceSessionStepContent(step){
+      const value = step?.content ?? step?.message ?? step?.text ?? '';
+      return this.traceValue(value);
+    },
+    traceSessionStepInput(step){
+      const value = step?.input ?? step?.prompt ?? step?.tool_input;
+      return value == null ? '' : this.traceValue(value);
+    },
+    traceSessionStepOutput(step){
+      const value = step?.output ?? step?.result ?? step?.tool_output;
+      return value == null ? '' : this.traceValue(value);
+    },
+    traceSessionMiniMapClass(step){
+      if(step?.trust_boundary){return 'border-warn/30 bg-warn/10 text-warn'}
+      if(step?.tool_name){return 'border-fail/30 bg-fail/10 text-fail'}
+      if(step?.memory_store){return 'border-pass/30 bg-pass/10 text-pass'}
+      return 'border-info/30 bg-info/10 text-info';
+    },
+    traceSessionStepAnchor(idx){
+      return 'trace-session-step-' + idx;
+    },
+    jumpToSessionStep(idx){
+      const element = document.getElementById(this.traceSessionStepAnchor(idx));
+      if(element){
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    },
+    renderBlastSvg(result){
+      const graph = this.traceSessionGraph(result);
+      const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      let svg = `<svg class="w-full min-w-[680px] h-56" viewBox="${esc(graph.viewBox)}" preserveAspectRatio="xMidYMid meet">`;
+      for(const edge of graph.edges){
+        svg += `<line x1="${edge.x1}" y1="${edge.y1}" x2="${edge.x2}" y2="${edge.y2}" stroke="${esc(edge.stroke)}" stroke-width="2" stroke-linecap="round"/>`;
+        svg += `<text x="${edge.labelX}" y="${edge.labelY}" fill="#8b949e" font-size="10" text-anchor="middle">${esc(edge.annotation)}</text>`;
+      }
+      for(const node of graph.nodes){
+        svg += `<rect x="${node.x-58}" y="${node.y-18}" width="116" height="36" rx="10" fill="${esc(node.fill)}" stroke="${esc(node.stroke)}"/>`;
+        svg += `<text x="${node.x}" y="${node.y-2}" fill="${esc(node.text)}" font-size="11" font-weight="600" text-anchor="middle">${esc(node.label)}</text>`;
+        svg += `<text x="${node.x}" y="${node.y+12}" fill="#8b949e" font-size="9" text-anchor="middle">${esc(node.kind)}</text>`;
+      }
+      svg += '</svg>';
+      return svg;
+    },
+    jumpToBlastGraph(){
+      const element = document.getElementById('trace-blast-graph');
+      if(element){
+        element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    },
+    traceSessionAnnotations(result){
+      return this.sessionDerived(result).annotations;
+    },
+    traceSessionGraph(result){
+      return this.sessionDerived(result).graph;
+    },
+    sessionViewSignature(result, view){
+      if(!view) view = this.sessionView;
+      return JSON.stringify({
+        sessionId: this.traceSessionId(result),
+        findingKey: result?.finding_key || '',
+        stepCount: this.traceSessionSteps(result).length,
+        view,
+      });
+    },
+    buildSessionDerived(result, view){
+      const steps = this.traceSessionSteps(result).filter(step => {
+        if(view.actor && this.traceSessionActor(step) !== view.actor){return false}
+        if(view.type && this.traceSessionStepType(step) !== view.type){return false}
+        if(view.boundary && (step.trust_boundary || '') !== view.boundary){return false}
+        if(view.tool && (step.tool_name || '') !== view.tool){return false}
+        if(view.flaggedOnly && !step.tool_name && !step.memory_store && !step.trust_boundary){return false}
+        return true;
+      });
+      const annotations = steps
+        .map((step, idx) => {
+          const notes = [];
+          if(step.tool_name){notes.push('tool ' + step.tool_name)}
+          if(step.memory_store){notes.push('memory ' + step.memory_store)}
+          if(step.trust_boundary){notes.push('boundary ' + step.trust_boundary)}
+          if(!notes.length){return null}
+          return {
+            id: idx,
+            label: this.traceSessionActor(step),
+            step: 'step ' + (idx + 1),
+            detail: notes.join(' • ') + (this.traceSessionStepContent(step) ? ' — ' + this.truncateText(this.traceSessionStepContent(step), 96) : ''),
+            tone: step.trust_boundary ? 'bg-warn/15 text-warn' : step.tool_name ? 'bg-fail/15 text-fail' : 'bg-pass/15 text-pass',
+          };
+        })
+        .filter(Boolean);
+      const actors = [...new Set(steps.map(step => this.traceSessionActor(step)).filter(Boolean))];
+      const tools = [...new Set(steps.map(step => step.tool_name).filter(Boolean))];
+      const memories = [...new Set(steps.map(step => step.memory_store).filter(Boolean))];
+      const impactLabel = result?.passed ? 'guardrail held' : ((result?.severity || 'finding') + ' finding');
+      const columns = [
+        { kind: 'actor', x: 90, labels: actors.length ? actors : ['entry'] },
+        { kind: 'tool', x: 285, labels: tools },
+        { kind: 'memory', x: 480, labels: memories },
+        { kind: 'impact', x: 675, labels: [impactLabel] },
+      ];
+      const maxRows = Math.max(...columns.map(column => Math.max(column.labels.length, 1)));
+      const rowGap = 70;
+      const height = Math.max(240, 70 + ((maxRows - 1) * rowGap));
+      const nodes = [];
+      const nodeMap = {};
+      const palette = {
+        actor: { fill: '#0d2038', stroke: '#58a6ff', text: '#58a6ff' },
+        tool: { fill: '#2a1214', stroke: '#f85149', text: '#f85149' },
+        memory: { fill: '#112518', stroke: '#3fb950', text: '#3fb950' },
+        impact: { fill: result?.passed ? '#112518' : '#2a1214', stroke: result?.passed ? '#3fb950' : '#f85149', text: result?.passed ? '#3fb950' : '#f85149' },
+      };
+      for (const column of columns) {
+        const total = Math.max(column.labels.length, 1);
+        const offset = (height - ((total - 1) * rowGap)) / 2;
+        column.labels.forEach((label, index) => {
+          const id = column.kind + ':' + label;
+          const style = palette[column.kind];
+          const node = {
+            id,
+            kind: column.kind,
+            label,
+            x: column.x,
+            y: Math.round(offset + (index * rowGap)),
+            fill: style.fill,
+            stroke: style.stroke,
+            text: style.text,
+          };
+          nodes.push(node);
+          nodeMap[id] = node;
+        });
+      }
+      const edges = [];
+      let previousActorId = actors.length ? 'actor:' + actors[0] : 'actor:entry';
+      let lastTouchedId = previousActorId;
+      steps.forEach((step, idx) => {
+        const actorId = 'actor:' + this.traceSessionActor(step);
+        if(nodeMap[previousActorId] && nodeMap[actorId] && actorId !== previousActorId){
+          edges.push({
+            id: 'handoff-' + idx,
+            from: previousActorId,
+            to: actorId,
+            annotation: step.trust_boundary || this.traceSessionStepType(step),
+            stroke: '#58a6ff',
+          });
+        }
+        let currentId = nodeMap[actorId] ? actorId : lastTouchedId;
+        if(step.tool_name){
+          const toolId = 'tool:' + step.tool_name;
+          if(nodeMap[currentId] && nodeMap[toolId]){
+            edges.push({
+              id: 'tool-' + idx,
+              from: currentId,
+              to: toolId,
+              annotation: step.trust_boundary || this.traceSessionStepType(step),
+              stroke: '#f85149',
+            });
+            currentId = toolId;
+          }
+        }
+        if(step.memory_store){
+          const memoryId = 'memory:' + step.memory_store;
+          if(nodeMap[currentId] && nodeMap[memoryId]){
+            edges.push({
+              id: 'memory-' + idx,
+              from: currentId,
+              to: memoryId,
+              annotation: step.trust_boundary || this.traceSessionStepType(step),
+              stroke: '#3fb950',
+            });
+            currentId = memoryId;
+          }
+        }
+        previousActorId = nodeMap[actorId] ? actorId : previousActorId;
+        lastTouchedId = currentId || lastTouchedId;
+      });
+      const impactId = 'impact:' + impactLabel;
+      if(nodeMap[lastTouchedId] && nodeMap[impactId] && lastTouchedId !== impactId){
+        edges.push({
+          id: 'impact-edge',
+          from: lastTouchedId,
+          to: impactId,
+          annotation: result?.passed ? 'contained' : (result?.severity || 'impact'),
+          stroke: result?.passed ? '#3fb950' : '#f85149',
+        });
+      }
+      const graph = {
+        viewBox: '0 0 760 ' + height,
+        nodes,
+        edges: edges
+          .filter(edge => nodeMap[edge.from] && nodeMap[edge.to])
+          .map(edge => {
+            const from = nodeMap[edge.from];
+            const to = nodeMap[edge.to];
+            return {
+              ...edge,
+              x1: from.x + 58,
+              y1: from.y,
+              x2: to.x - 58,
+              y2: to.y,
+              labelX: Math.round((from.x + to.x) / 2),
+              labelY: Math.round(((from.y + to.y) / 2) - 8),
+            };
+          }),
+      };
+      return { filteredSteps: steps, annotations, graph };
+    },
+    sessionDerived(result){
+      const key = this.sessionViewSignature(result);
+      if(this.sessionDerivedMemo.key === key){
+        return this.sessionDerivedMemo.value;
+      }
+      const value = this.buildSessionDerived(result, this.sessionView);
+      this.sessionDerivedMemo = { key, value };
+      return value;
+    },
+    findResultByFindingKey(findingKey){
+      if(!findingKey || !this.currentRun?.results){return null}
+      return this.currentRun.results.find(result => result.finding_key === findingKey) || null;
+    },
+    focusAttackSession(sessionId){
+      this.investigationFilter.session = sessionId || '';
+      this.setInvestigationPage(1);
+    },
+    inspectAttackSession(session){
+      const result = this.findResultByFindingKey(session?.representative_finding_key)
+        || this.currentRun?.results?.find(item => this.findingSessionId(item) === session?.session_id)
+        || null;
+      if(result){
+        this.openTraceInspector(result);
+      }
+    },
+    isClosedTriageStatus(status){
+      return status === 'fixed' || status === 'false_positive';
+    },
+    findingStateLabel(result){
+      return this.isClosedTriageStatus(this.triageStatusValue(result)) ? 'closed' : 'active';
+    },
+    findingStateClass(result){
+      return this.isClosedTriageStatus(this.triageStatusValue(result))
+        ? 'bg-pass/15 text-pass'
+        : 'bg-fail/15 text-fail';
+    },
+    findingOwner(result){
+      return result?.triage?.owner || 'unassigned';
+    },
+    findingSessionId(result){
+      return this.traceSessionId(result);
+    },
+    findingLastSeenLabel(result){
+      const ts = result?.triage?.last_seen || this.currentRun?.timestamp;
+      return ts ? this.formatDate(ts) : '-';
+    },
+    findingSummary(result){
+      const detectorSummary = this.gradingSummary(result);
+      if (detectorSummary) return detectorSummary;
+      if (result?.triage?.note) return result.triage.note;
+      return this.traceStatusLabel(result);
+    },
+    triageStatusValue(result){
+      return result?.triage?.status || '';
+    },
+    triageStatusLabel(result){
+      const status = this.triageStatusValue(result);
+      return status ? this.prettyKey(status) : 'untriaged';
+    },
+    triageBadgeClass(status){
+      return {
+        new: 'bg-fail/15 text-fail',
+        acknowledged: 'bg-warn/15 text-warn',
+        fixed: 'bg-pass/15 text-pass',
+        accepted_risk: 'bg-info/15 text-info',
+        false_positive: 'bg-bg-hover text-fg-dim',
+        '': 'bg-bg-hover text-fg-dim',
+      }[status || ''] || 'bg-bg-hover text-fg-dim';
+    },
+    syncTriageDraft(result){
+      const triage = result?.triage || {};
+      const status = triage.status || ((!result?.passed && !result?.evidence?.skipped) ? 'new' : '');
+      this.triageDraft = {
+        status,
+        owner: triage.owner || '',
+        note: triage.note || '',
+      };
+    },
+    async saveTriage(){
+      if(!this.inspectedResult){return}
+      if(!this.triageDraft.status){
+        this.toast('Choose a triage status','error');
+        return;
+      }
+      this.triageSaving = true;
+      try {
+        const response = await fetch('/api/triage', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            probe_id: this.inspectedResult.probe_id,
+            case_id: this.inspectedResult.case_id,
+            status: this.triageDraft.status,
+            owner: this.triageDraft.owner,
+            note: this.triageDraft.note,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || 'Failed to save triage');
+        }
+        this.applyTriageToRun(this.inspectedResult.probe_id, this.inspectedResult.case_id, payload);
+        this.syncTriageDraft(this.inspectedResult);
+        this.toast('Triage updated');
+      } catch (error) {
+        this.toast(error.message || 'Failed to save triage', 'error');
+      } finally {
+        this.triageSaving = false;
+      }
+    },
+    applyTriageToRun(probeId, caseId, triage){
+      if(this.currentRun?.results){
+        for(const result of this.currentRun.results){
+          if(result.probe_id===probeId && result.case_id===caseId){
+            result.finding_key = triage.finding_key;
+            result.triage = triage;
+          }
+        }
+      }
+      if(this.inspectedResult && this.inspectedResult.probe_id===probeId && this.inspectedResult.case_id===caseId){
+        this.inspectedResult.finding_key = triage.finding_key;
+        this.inspectedResult.triage = triage;
+      }
+    },
+    prettyKey(key){return String(key).replace(/_/g,' ')},
+    severityRank(sev){return {critical:4,high:3,medium:2,low:1}[sev]||0},
+    traceValue(value){
+      if(value==null)return'';
+      if(typeof value==='string'||typeof value==='number'||typeof value==='boolean')return String(value);
+      return JSON.stringify(value);
+    },
+    truncateText(text,len){return text&&text.length>len?text.substring(0,len)+'...':text||''},
+    fmtPct(v){return v!=null?(v*100).toFixed(1)+'%':'-'},
+    formatDate(ts){if(!ts)return'';try{return new Date(ts).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}catch{return ts}},
+    timeAgo(ts){if(!ts)return'';try{const d=Math.floor((Date.now()-new Date(ts).getTime())/1000);if(d<60)return d+'s';if(d<3600)return Math.floor(d/60)+'m';if(d<86400)return Math.floor(d/3600)+'h';return Math.floor(d/86400)+'d'}catch{return ts}},
+    sevBadgeClass(sev){return{critical:'bg-fail/15 text-fail',high:'bg-orange-500/15 text-orange-400',medium:'bg-warn/15 text-warn',low:'bg-info/15 text-info'}[sev]||'bg-bg-hover text-fg-dim'},
+    toast(msg,type='success'){const id=Date.now();this.toasts.push({id,message:msg,type});setTimeout(()=>{this.toasts=this.toasts.filter(t=>t.id!==id)},4000)},
+  };
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+# AegisRT Benchmark Config — Compare OpenAI vs Anthropic
+#
+# Usage:
+#   aegisrt benchmark run -c examples/benchmark-openai-vs-anthropic.yaml
+#
+# Requires environment variables:
+#   OPENAI_API_KEY
+#   ANTHROPIC_API_KEY
+
+targets:
+  - name: gpt-4o
+    type: openai_compat
+    url: "https://api.openai.com/v1/chat/completions"
+    timeout_seconds: 60
+    headers:
+      Authorization: "Bearer ${OPENAI_API_KEY}"
+    params:
+      model: gpt-4o
+      temperature: "0"
+
+  - name: claude-sonnet
+    type: openai_compat
+    url: "https://api.anthropic.com/v1/messages"
+    timeout_seconds: 60
+    headers:
+      x-api-key: "${ANTHROPIC_API_KEY}"
+      anthropic-version: "2023-06-01"
+    params:
+      model: claude-sonnet-4-20250514
+      temperature: "0"
+
+probes:
+  - id: prompt_injection
+    family: injection
+    generator: static
+    detectors: [regex, policy]
+    severity: high
+
+  - id: rt_system_integrity
+    family: system_integrity
+    generator: static
+    detectors: [regex, policy]
+    severity: critical
+
+  - id: rt_cbrn
+    family: cbrn
+    generator: static
+    detectors: [regex, policy]
+    severity: critical
+
+  - id: rt_cyber
+    family: cyber
+    generator: static
+    detectors: [regex, policy]
+    severity: critical
+
+  - id: rt_persuasion
+    family: persuasion
+    generator: static
+    detectors: [regex, policy]
+    severity: high
+
+runtime:
+  concurrency: 10
+  rate_limit_per_minute: 100
+  max_cost_usd: 25.00
+  checkpoint_every: 50
+
+report:
+  formats: [terminal, html, csv]
+  output_dir: .aegisrt

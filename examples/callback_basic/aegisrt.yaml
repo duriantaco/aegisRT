@@ -1,0 +1,73 @@
+target:
+  type: callback
+  timeout_seconds: 10
+
+probes:
+  - id: prompt_injection
+    family: injection
+    generator: static
+    detectors:
+      - regex
+      - policy
+    severity: high
+
+
+  - id: data_exfiltration
+    family: exfiltration
+    generator: static
+    detectors:
+      - regex
+      - policy
+    severity: high
+
+
+  - id: data_leakage
+    family: data_leakage
+    generator: static
+    detectors:
+      - leakage
+      - regex
+    severity: critical
+
+
+  - id: tool_misuse
+    family: tool_misuse
+    generator: static
+    detectors:
+      - policy
+      - regex
+    severity: critical
+
+
+  - id: rag_manipulation
+    family: rag_manipulation
+    generator: static
+    detectors:
+      - regex
+      - policy
+    severity: high
+
+
+  - id: refusal_bypass
+    family: refusal_bypass
+    generator: static
+    detectors:
+      - policy
+      - regex
+    severity: high
+
+
+runtime:
+  concurrency: 4
+  retries: 1
+  timeout_seconds: 10
+
+report:
+  formats:
+    - terminal
+    - json
+    - html
+  output_dir: .aegisrt
+  fail_on:
+    severity: high
+    min_confidence: 0.7

@@ -1,0 +1,55 @@
+target:
+  type: openai_compat
+  url: "https://api.anthropic.com/v1/messages"
+  timeout_seconds: 30
+  retries: 2
+  headers:
+    x-api-key: "${ANTHROPIC_API_KEY}"
+    anthropic-version: "2023-06-01"
+  params:
+    model: "claude-sonnet-4-20250514"
+    max_tokens: "1024"
+
+probes:
+  - id: prompt_injection
+    family: injection
+    generator: static
+    detectors: [llm_judge]
+    severity: high
+
+  - id: data_leakage
+    family: data_leakage
+    generator: static
+    detectors: [llm_judge]
+    severity: critical
+
+  - id: refusal_bypass
+    family: refusal_bypass
+    generator: static
+    detectors: [llm_judge]
+    severity: high
+
+  - id: tool_misuse
+    family: tool_misuse
+    generator: static
+    detectors: [llm_judge]
+    severity: critical
+
+providers:
+  judge:
+    type: anthropic
+    model: "claude-sonnet-4-20250514"
+    base_url: "https://api.anthropic.com/v1"
+    api_key: "${ANTHROPIC_API_KEY}"
+
+runtime:
+  concurrency: 3
+  retries: 1
+  timeout_seconds: 60
+
+report:
+  formats: [terminal, json]
+  output_dir: .aegisrt
+  fail_on:
+    severity: high
+    min_confidence: 0.7
