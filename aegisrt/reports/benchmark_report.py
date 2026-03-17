@@ -93,7 +93,12 @@ class BenchmarkTerminalReporter:
             rank = entry["rank"]
             medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(rank, str(rank))
             pct = entry["pass_rate"] * 100
-            color = "green" if pct >= 95 else ("yellow" if pct >= 80 else "red")
+            if pct >= 95:
+                color = "green"
+            elif pct >= 80:
+                color = "yellow"
+            else:
+                color = "red"
             table.add_row(
                 str(medal),
                 entry["target"],

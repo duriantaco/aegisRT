@@ -27,7 +27,12 @@ from aegisrt.utils.aimd_scheduler import run_with_aimd
 from aegisrt.converters.base import ConverterPipeline
 from aegisrt.converters.registry import build_pipeline
 from aegisrt.core.metrics import aggregate_metrics
+from aegisrt.core.resistance_profile import compute_resistance_profile
 from aegisrt.core.target_metadata import extract_provider_model, extract_target_model
+from aegisrt.taxonomies.probe_technique_map import (
+    PROBE_TECHNIQUES,
+    SEED_TECHNIQUES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +118,14 @@ class SecurityRunner:
         target.setup()
 
         try:
-            from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
+            from rich.progress import (
+                Progress,
+                SpinnerColumn,
+                TextColumn,
+                BarColumn,
+                TaskProgressColumn,
+                TimeElapsedColumn,
+            )
 
             probe_instances = self._load_probes()
             with Progress(
@@ -134,9 +146,26 @@ class SecurityRunner:
                     results = self._execute_probe(probe, target, pipeline, probe_cfg=probe_cfg)
                     passed = sum(1 for r in results if r.passed)
                     failed = len(results) - passed
-                    progress.console.print(
-                        f"  {probe.id}: [green]{passed} passed[/green], [red]{failed} failed[/red]"
+                    inconclusive = sum(
+                        1 for r in results if r.evidence.get("inconclusive")
                     )
+                    status_parts = [
+                        f"[green]{passed} passed[/green]",
+                        f"[red]{failed} failed[/red]",
+                    ]
+                    if inconclusive:
+                        status_parts.append(
+                            f"[bold yellow]{inconclusive} inconclusive[/bold yellow]"
+                        )
+                    progress.console.print(
+                        f"  {probe.id}: {', '.join(status_parts)}"
+                    )
+                    if inconclusive:
+                        progress.console.print(
+                            f"  [bold yellow]WARNING:[/bold yellow] {inconclusive} result(s) "
+                            f"could not be evaluated (judge LLM unreachable). "
+                            f"These are marked FAIL — fix your provider config to get real verdicts."
+                        )
                     for result in results:
                         session.add_result(result)
                     progress.advance(total_task)
@@ -149,6 +178,9 @@ class SecurityRunner:
         report.config = self._config.model_dump()
 
         report.summary = self._build_summary(report)
+        report.summary["resistance_profile"] = compute_resistance_profile(
+            report.results
+        )
 
         run_metrics = aggregate_metrics(self._runtime.call_metrics)
         report.metrics = run_metrics.model_dump()
@@ -189,6 +221,9 @@ class SecurityRunner:
     def _build_summary(self, report: RunReport) -> dict:
         total = len(report.results)
         skipped = sum(1 for r in report.results if r.evidence.get("skipped"))
+        inconclusive = sum(
+            1 for r in report.results if r.evidence.get("inconclusive")
+        )
         passed = sum(
             1 for r in report.results if r.passed and not r.evidence.get("skipped")
         )
@@ -223,6 +258,7 @@ class SecurityRunner:
             "passed": passed,
             "failed": failed,
             "skipped": skipped,
+            "inconclusive": inconclusive,
             "pass_rate": round(passed / (passed + failed), 4)
             if (passed + failed)
             else 1.0,
@@ -504,8 +540,12 @@ class SecurityRunner:
 
     def _resolve_generator(self, probe: BaseProbe, probe_cfg=None):
         default_generator = probe.get_generator()
-        generator_name = probe_cfg.generator if probe_cfg is not None else None
-        generator_cfg = probe_cfg.generator_config if probe_cfg is not None else None
+        if probe_cfg is not None:
+            generator_name = probe_cfg.generator
+            generator_cfg = probe_cfg.generator_config
+        else:
+            generator_name = None
+            generator_cfg = None
         if generator_name:
             gen_registry = _get_generator_registry()
             gen_cls = gen_registry.get(generator_name)
@@ -529,9 +569,8 @@ class SecurityRunner:
                             "generator_config.path was provided."
                         )
                     if generator_name == "template":
-                        return gen_cls(
-                            variables=(generator_cfg.variables if generator_cfg is not None else None),
-                        )
+                        variables = generator_cfg.variables if generator_cfg is not None else None
+                        return gen_cls(variables=variables)
                     if generator_name in {"llm", "multilingual"}:
                         return gen_cls(provider_config=attacker_cfg)
                     if generator_name == "adaptive":
@@ -568,6 +607,17 @@ class SecurityRunner:
 
         return probe.get_seeds()
 
+    @staticmethod
+    def _tag_attack_techniques(cases: list[TestCase], probe_id: str) -> None:
+        seed_map = SEED_TECHNIQUES.get(probe_id, {})
+        probe_default = PROBE_TECHNIQUES.get(probe_id, [])
+
+        for index, case in enumerate(cases):
+            if "attack_techniques" not in case.metadata:
+                techniques = seed_map.get(index, probe_default)
+                if techniques:
+                    case.metadata["attack_techniques"] = techniques
+
     def _execute_probe(
         self,
         probe: BaseProbe,
@@ -598,6 +648,8 @@ class SecurityRunner:
                 )
 
         cases = generator.generate(self._resolve_probe_seeds(probe, probe_cfg), probe.id)
+
+        self._tag_attack_techniques(cases, probe.id)
 
         if converter_pipeline is not None:
             original_count = len(cases)

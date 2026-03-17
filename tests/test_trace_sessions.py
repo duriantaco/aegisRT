@@ -60,3 +60,49 @@ def test_get_trace_session_id_falls_back_to_case_metadata():
     }
 
     assert get_trace_session_id(trace) == "conversation-42"
+
+
+def test_build_session_trace_promotes_agent_response_artifacts():
+    payload = build_session_trace(
+        {},
+        {
+            "session_id": "sess-2",
+            "attack_id": "attack-2",
+            "tools_called": [
+                {
+                    "name": "browser.open",
+                    "arguments": {"url": "https://example.com"},
+                    "output": "opened",
+                    "trust_boundary": "external_tool",
+                }
+            ],
+            "retrieval_context": [
+                {
+                    "content": "retrieved passage",
+                    "source_id": "doc-9",
+                    "query": "pricing",
+                    "trust_boundary": "vector_store",
+                }
+            ],
+            "memory_accesses": [
+                {
+                    "store": "episodic",
+                    "operation": "read",
+                    "key": "tenant",
+                    "value": "acme",
+                }
+            ],
+            "handoffs": [
+                {"from_agent": "planner", "to_agent": "executor", "reason": "delegate"}
+            ],
+        },
+    )
+
+    assert payload["session_id"] == "sess-2"
+    assert payload["attack_id"] == "attack-2"
+    assert payload["tools_called"][0]["name"] == "browser.open"
+    assert payload["retrieval_context"][0]["source_id"] == "doc-9"
+    assert payload["memory_accesses"][0]["store"] == "episodic"
+    assert payload["handoffs"][0]["to_agent"] == "executor"
+    assert payload["steps"][0]["type"] == "tool_call"
+    assert payload["steps"][1]["type"] == "retrieval"

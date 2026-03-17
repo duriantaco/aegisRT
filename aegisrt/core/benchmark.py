@@ -189,8 +189,12 @@ class BenchmarkRunner:
                 else:
                     matrix[cat][score.target_name] = -1.0
 
-        best_target = ranking[0].target_name if ranking else ""
-        best_rate = ranking[0].pass_rate if ranking else 0.0
+        if ranking:
+            best_target = ranking[0].target_name
+            best_rate = ranking[0].pass_rate
+        else:
+            best_target = ""
+            best_rate = 0.0
 
         return {
             "target_count": len(scores),

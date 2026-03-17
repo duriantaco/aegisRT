@@ -64,11 +64,21 @@ class LlmGenerator(BaseGenerator):
 
     def generate(self, seeds: list[str], probe_id: str, **kwargs) -> list[TestCase]:
         cases: list[TestCase] = []
+        api_key = self.provider_config.get("api_key", "")
+        if not api_key:
+            logger.warning(
+                "LlmGenerator: no API key configured — falling back to "
+                "raw seeds for probe '%s'. Set providers.attacker.api_key "
+                "to enable LLM-powered prompt generation.",
+                probe_id,
+            )
+
         for seed in seeds:
             generated_texts = self._generate_from_seed(seed)
             if not generated_texts:
-                logger.info(
-                    "LlmGenerator: falling back to raw seed for probe %s",
+                logger.warning(
+                    "LlmGenerator: LLM call failed for probe '%s', "
+                    "falling back to raw seed. Check API key and network.",
                     probe_id,
                 )
                 generated_texts = [seed]

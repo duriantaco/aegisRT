@@ -81,12 +81,23 @@ class LlmJudgeDetector(BaseDetector):
         judge_response = self._call_judge(prompt)
 
         if judge_response is None:
+            error_reason = (
+                "No judge provider configured"
+                if self.provider_config is None
+                else "Judge LLM call failed (check API key, network, or rate limits)"
+            )
+            logger.warning(
+                "LlmJudgeDetector: returning INCONCLUSIVE — %s. "
+                "Results cannot be trusted without a working judge.",
+                error_reason,
+            )
             return Detection(
                 detector=self.id,
                 triggered=False,
                 score=0.0,
                 evidence={
-                    "error": "No judge provider configured",
+                    "error": error_reason,
+                    "inconclusive": True,
                     "judge": judge_context,
                 },
             )
@@ -127,7 +138,10 @@ class LlmJudgeDetector(BaseDetector):
         is_anthropic = "anthropic.com" in base_url
 
         if is_anthropic:
-            url = f"{base_url}/messages" if not base_url.endswith("/messages") else base_url
+            if base_url.endswith("/messages"):
+                url = base_url
+            else:
+                url = f"{base_url}/messages"
             headers = {
                 "Content-Type": "application/json",
                 "anthropic-version": "2023-06-01",

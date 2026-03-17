@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 from string import Template
 
 import httpx
@@ -83,6 +82,15 @@ class MultilingualGenerator(BaseGenerator):
     def generate(
         self, seeds: list[str], probe_id: str, **kwargs
     ) -> list[TestCase]:
+        api_key = self.provider_config.get("api_key", "")
+        if not api_key:
+            logger.warning(
+                "MultilingualGenerator: no API key configured — "
+                "only original-language seeds will be used for probe '%s'. "
+                "Set providers.attacker.api_key to enable translations.",
+                probe_id,
+            )
+
         cases: list[TestCase] = []
 
         for seed in seeds:

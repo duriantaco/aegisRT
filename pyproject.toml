@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aegisrt"
-version = "0.1.0"
-description = "Python-native LLM security testing and defense-audit framework -- prompt injection testing, OWASP LLM Top 10 compliance, and static code audit for AI applications"
+version = "0.2.0"
+description = "LLM security testing framework — 27 probes, agent trace inspection, OWASP LLM Top 10 (2025) compliance, resistance profiling, and static code audit for AI applications"
 requires-python = ">=3.10"
 license = "MIT"
 readme = "README.md"

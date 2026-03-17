@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from aegisrt.config.models import TargetConfig
+from aegisrt.targets.agent import (
+    AgentHandoff,
+    AgentMemoryAccess,
+    AgentResponse,
+    AgentStep,
+    AgentToolCall,
+    RetrievalContextItem,
+)
 from aegisrt.targets.base import TargetResponse
 from aegisrt.targets.callback import CallbackTarget
 from aegisrt.targets.http import HttpTarget
@@ -29,6 +37,64 @@ def test_callback_target_preserves_target_response_metadata():
     response = target.execute("test")
     assert response.text == "ok"
     assert response.metadata["provider"] == "demo"
+    assert response.metadata["model"] == "gpt-4.1-mini"
+
+def test_callback_target_accepts_structured_agent_response():
+    target = CallbackTarget(
+        fn=lambda p: AgentResponse(
+            output_text=f"Agent handled: {p}",
+            session_id="sess-1",
+            attack_id="attack-1",
+            tools_called=[
+                AgentToolCall(
+                    name="web_search",
+                    arguments={"query": p},
+                    output="result",
+                    trust_boundary="external_tool",
+                )
+            ],
+            retrieval_context=[
+                RetrievalContextItem(
+                    content="retrieved chunk",
+                    source_id="doc-1",
+                    query=p,
+                    trust_boundary="vector_store",
+                )
+            ],
+            memory_accesses=[
+                AgentMemoryAccess(
+                    store="episodic",
+                    operation="read",
+                    key="user_profile",
+                    value={"tier": "gold"},
+                )
+            ],
+            handoffs=[
+                AgentHandoff(from_agent="planner", to_agent="executor", reason="delegate")
+            ],
+            steps=[
+                AgentStep(
+                    step_id="plan-1",
+                    type="message",
+                    agent_id="planner",
+                    agent_role="planner",
+                    content="Plan created",
+                )
+            ],
+        ),
+        model_name="gpt-4.1-mini",
+    )
+
+    response = target.execute("find docs")
+
+    assert response.text == "Agent handled: find docs"
+    assert response.metadata["session_id"] == "sess-1"
+    assert response.metadata["attack_id"] == "attack-1"
+    assert response.metadata["tools_called"][0]["name"] == "web_search"
+    assert response.metadata["retrieval_context"][0]["source_id"] == "doc-1"
+    assert response.metadata["memory_accesses"][0]["store"] == "episodic"
+    assert response.metadata["handoffs"][0]["to_agent"] == "executor"
+    assert response.metadata["session_steps"][0]["agent_id"] == "planner"
     assert response.metadata["model"] == "gpt-4.1-mini"
 
 def test_callback_target_handles_exception():

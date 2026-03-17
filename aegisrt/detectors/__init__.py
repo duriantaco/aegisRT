@@ -1,3 +1,4 @@
+from aegisrt.detectors.agent_trace import AgentTraceDetector
 from aegisrt.detectors.base import BaseDetector
 from aegisrt.detectors.bias import BiasDetector
 from aegisrt.detectors.hallucination import HallucinationDetector
@@ -8,6 +9,7 @@ from aegisrt.detectors.policy import PolicyDetector
 from aegisrt.detectors.regex import ForbiddenStringsDetector, RegexDetector
 
 __all__ = [
+    "AgentTraceDetector",
     "BaseDetector",
     "BiasDetector",
     "ForbiddenStringsDetector",

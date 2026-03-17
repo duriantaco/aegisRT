@@ -18,6 +18,8 @@ class TerminalReporter:
     def report(self, run_report: RunReport, duration_seconds: float = 0.0) -> None:
         self._print_header(run_report, duration_seconds)
         self._print_summary_table(run_report)
+        self._print_inconclusive_warning(run_report)
+        self._print_resistance_profile(run_report)
         self._print_metrics(run_report)
         failed = [r for r in run_report.results if not r.passed]
         if failed:
@@ -69,6 +71,100 @@ class TerminalReporter:
             style="bold",
         )
         self.console.print(table)
+
+    def _print_inconclusive_warning(self, report: RunReport) -> None:
+        inconclusive = [
+            r for r in report.results if r.evidence.get("inconclusive")
+        ]
+        if not inconclusive:
+            return
+
+        affected_probes = sorted({r.probe_id for r in inconclusive})
+        panel = Panel(
+            f"[bold]{len(inconclusive)}[/bold] result(s) across "
+            f"[bold]{len(affected_probes)}[/bold] probe(s) could not be "
+            f"evaluated because the judge LLM was unreachable.\n"
+            f"Affected probes: {', '.join(affected_probes)}\n\n"
+            f"These results are marked [bold]FAIL[/bold] (fail-safe). "
+            f"Configure a working judge provider to get real verdicts.\n"
+            f"Set [bold]providers.judge.api_key[/bold] and "
+            f"[bold]providers.judge.base_url[/bold] in your config.",
+            title="Inconclusive Results",
+            border_style="bold yellow",
+        )
+        self.console.print(panel)
+
+    def _print_resistance_profile(self, report: RunReport) -> None:
+        profile = report.summary.get("resistance_profile")
+        if not profile or not profile.get("by_technique"):
+            return
+
+        grade = profile.get("overall_grade", "unknown")
+        score = profile.get("overall_score", 0.0)
+        grade_colors = {
+            "excellent": "bold green",
+            "good": "green",
+            "fair": "yellow",
+            "poor": "red",
+            "critical": "bold red",
+        }
+        gc = grade_colors.get(grade, "white")
+
+        table = Table(
+            title=f"Resistance Profile  [{gc}]{grade.upper()} ({score * 100:.1f}%)[/{gc}]",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        table.add_column("Technique", min_width=20)
+        table.add_column("Tests", justify="right", width=6)
+        table.add_column("Pass", justify="right", width=6)
+        table.add_column("Fail", justify="right", width=6)
+        table.add_column("Rate", justify="right", width=8)
+        table.add_column("", width=12)
+
+        by_tech = profile["by_technique"]
+        sorted_techs = sorted(
+            by_tech.items(), key=lambda x: x[1]["pass_rate"]
+        )
+
+        for tech_id, info in sorted_techs:
+            rate = info["pass_rate"]
+            if rate >= 0.95:
+                color = "green"
+                bar = "[green]" + "█" * 10 + "[/green]"
+            elif rate >= 0.80:
+                color = "green"
+                filled = round(rate * 10)
+                bar = f"[green]{'█' * filled}[/green]{'░' * (10 - filled)}"
+            elif rate >= 0.60:
+                color = "yellow"
+                filled = round(rate * 10)
+                bar = f"[yellow]{'█' * filled}[/yellow]{'░' * (10 - filled)}"
+            else:
+                color = "red"
+                filled = round(rate * 10)
+                bar = f"[red]{'█' * filled}[/red]{'░' * (10 - filled)}"
+
+            table.add_row(
+                info["name"],
+                str(info["total"]),
+                str(info["passed"]),
+                str(info["failed"]),
+                f"[{color}]{rate * 100:.0f}%[/{color}]",
+                bar,
+            )
+
+        self.console.print(table)
+
+        weakest = profile.get("weakest", [])
+        if weakest and weakest[0]["pass_rate"] < 1.0:
+            weak_names = [w["name"] for w in weakest if w["pass_rate"] < 1.0]
+            if weak_names:
+                self.console.print(
+                    f"  [bold yellow]Prioritize defenses for:[/bold yellow] "
+                    f"{', '.join(weak_names[:3])}"
+                )
+                self.console.print()
 
     def _print_metrics(self, report: RunReport) -> None:
         metrics = report.metrics

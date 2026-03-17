@@ -529,9 +529,20 @@ class AdaptiveGenerator(BaseGenerator):
             r"EXPLANATION:\s*(.+)", judge_text, re.IGNORECASE | re.DOTALL
         )
 
-        verdict = "FAIL" if verdict_match and verdict_match.group(1).upper() == "FAIL" else "PASS"
-        confidence = min(max(float(confidence_match.group(1)), 0.0), 1.0) if confidence_match else 0.5
-        explanation = explanation_match.group(1).strip() if explanation_match else ""
+        if verdict_match and verdict_match.group(1).upper() == "FAIL":
+            verdict = "FAIL"
+        else:
+            verdict = "PASS"
+
+        if confidence_match:
+            confidence = min(max(float(confidence_match.group(1)), 0.0), 1.0)
+        else:
+            confidence = 0.5
+
+        if explanation_match:
+            explanation = explanation_match.group(1).strip()
+        else:
+            explanation = ""
 
         return verdict, confidence, explanation
 

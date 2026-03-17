@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+
+PROBE_TECHNIQUES: dict[str, list[str]] = {
+    "prompt_injection": ["direct_override"],
+    "prompt_construction": ["delimiter_injection"],
+    "encoding_attack": ["encoding_bypass"],
+    "instruction_hierarchy": ["authority_claim"],
+    "many_shot_jailbreak": ["many_shot"],
+    "linguistic_evasion": ["hypothetical"],
+    "semantic_injection": ["indirect_injection"],
+    "refusal_bypass": ["role_play"],
+    "multi_turn_attack": ["role_play"],
+    "rt_system_integrity": ["direct_override"],
+    "rag_manipulation": ["rag_poisoning"],
+    "data_exfiltration": ["system_prompt_extraction"],
+    "data_leakage": ["pii_elicitation"],
+    "context_leakage": ["context_extraction"],
+    "agent_tool_abuse": ["tool_abuse"],
+    "agent_cross_tenant": ["cross_tenant"],
+    "tool_misuse": ["tool_abuse"],
+    "output_policy": ["harmful_content"],
+    "harmful_content": ["harmful_content"],
+    "unsafe_code": ["unsafe_code_gen"],
+    "hallucination": ["hallucination"],
+    "bias_stereotyping": ["bias"],
+    "sycophancy": ["sycophancy"],
+    "rt_cbrn": ["harmful_content"],
+    "rt_cyber": ["harmful_content"],
+    "rt_persuasion": ["emotional_manipulation"],
+    "resource_exhaustion": ["resource_exhaustion"],
+}
+
+
+SEED_TECHNIQUES: dict[str, dict[int, list[str]]] = {
+    "instruction_hierarchy": {
+        0: ["direct_override"], 1: ["direct_override"],
+        2: ["direct_override"], 3: ["direct_override"],
+        4: ["authority_claim"], 5: ["authority_claim"],
+        6: ["authority_claim"], 7: ["authority_claim"],
+        8: ["delimiter_injection"], 9: ["delimiter_injection"],
+        10: ["delimiter_injection"],
+        11: ["conflicting_instructions"], 12: ["conflicting_instructions"],
+        13: ["conflicting_instructions"], 14: ["conflicting_instructions"],
+        15: ["nested_injection"], 16: ["nested_injection"],
+        17: ["nested_injection"],
+        18: ["temporal_override"], 19: ["temporal_override"],
+        20: ["temporal_override"], 21: ["temporal_override"],
+    },
+    "linguistic_evasion": {
+        0: ["hypothetical"], 1: ["hypothetical"],
+        2: ["hypothetical"], 3: ["hypothetical"],
+        4: ["academic_framing"], 5: ["academic_framing"],
+        6: ["academic_framing"],
+        7: ["historical_framing"], 8: ["historical_framing"],
+        9: ["historical_framing"],
+        10: ["euphemism"], 11: ["euphemism"],
+        12: ["euphemism"],
+        13: ["euphemism"], 14: ["euphemism"],
+        15: ["euphemism"],
+        16: ["continuation"], 17: ["continuation"],
+        18: ["continuation"], 19: ["continuation"],
+    },
+    "refusal_bypass": {
+        0: ["hypothetical"], 1: ["hypothetical"], 2: ["hypothetical"],
+        3: ["role_play"], 4: ["role_play"], 5: ["role_play"],
+        6: ["role_play"], 7: ["role_play"],
+        8: ["authority_claim"], 9: ["authority_claim"],
+        10: ["authority_claim"], 11: ["authority_claim"],
+        12: ["emotional_manipulation"], 13: ["emotional_manipulation"],
+        14: ["emotional_manipulation"], 15: ["emotional_manipulation"],
+        16: ["hypothetical"], 17: ["role_play"],
+        18: ["authority_claim"], 19: ["emotional_manipulation"],
+        20: ["hypothetical"],
+    },
+    "sycophancy": {
+        0: ["sycophancy"], 1: ["sycophancy"], 2: ["sycophancy"],
+        3: ["sycophancy"], 4: ["sycophancy"],
+        5: ["social_pressure"], 6: ["social_pressure"],
+        7: ["social_pressure"], 8: ["social_pressure"],
+        9: ["social_pressure"], 10: ["social_pressure"],
+        11: ["social_pressure"], 12: ["social_pressure"],
+        13: ["sycophancy"], 14: ["sycophancy"], 15: ["sycophancy"],
+        16: ["emotional_manipulation"], 17: ["emotional_manipulation"],
+        18: ["emotional_manipulation"], 19: ["emotional_manipulation"],
+    },
+}
+
+
+def get_techniques_for_probe(probe_id: str) -> list[str]:
+    return PROBE_TECHNIQUES.get(probe_id, [])

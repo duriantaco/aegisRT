@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -8,12 +9,12 @@ from pydantic import BaseModel, Field
 class TargetResponse(BaseModel):
 
     text: str
-    raw: dict | str | None = None
+    raw: Any = None
     latency_ms: float = 0.0
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BaseTarget(ABC):

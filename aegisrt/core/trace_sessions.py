@@ -166,6 +166,209 @@ def _normalize_conversation_steps(conversation_trace: Sequence[Any]) -> list[dic
     return steps
 
 
+def _normalize_tool_calls(raw_tools: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_tools, Sequence) or isinstance(raw_tools, (str, bytes, bytearray)):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for index, tool in enumerate(raw_tools):
+        payload = dict(tool) if isinstance(tool, Mapping) else {"name": str(tool)}
+        name = _first_nonempty(
+            payload.get("name"),
+            payload.get("tool_name"),
+            payload.get("tool"),
+            f"tool-{index + 1}",
+        )
+        item: dict[str, Any] = {"name": str(name)}
+        arguments = _first_nonempty(
+            payload.get("arguments"),
+            payload.get("input"),
+            payload.get("tool_input"),
+        )
+        if arguments is not None:
+            item["arguments"] = arguments
+        output = _first_nonempty(
+            payload.get("output"),
+            payload.get("result"),
+            payload.get("tool_output"),
+        )
+        if output is not None:
+            item["output"] = output
+        for key in ("status", "error", "trust_boundary", "memory_store"):
+            value = payload.get(key)
+            if value not in (None, ""):
+                item[key] = value
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping) and metadata:
+            item["metadata"] = dict(metadata)
+        normalized.append(item)
+    return normalized
+
+
+def _normalize_retrieval_context(raw_items: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes, bytearray)):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_items:
+        payload = dict(item) if isinstance(item, Mapping) else {"content": str(item)}
+        content = _first_nonempty(
+            payload.get("content"),
+            payload.get("text"),
+            payload.get("chunk"),
+        )
+        normalized_item: dict[str, Any] = {
+            "content": "" if content is None else str(content)
+        }
+        for key, aliases in {
+            "source_id": ("source_id", "id", "doc_id"),
+            "title": ("title", "name"),
+            "uri": ("uri", "url"),
+            "query": ("query",),
+            "score": ("score",),
+            "trust_boundary": ("trust_boundary",),
+        }.items():
+            value = _first_nonempty(*(payload.get(alias) for alias in aliases))
+            if value not in (None, ""):
+                normalized_item[key] = value
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping) and metadata:
+            normalized_item["metadata"] = dict(metadata)
+        normalized.append(normalized_item)
+    return normalized
+
+
+def _normalize_memory_accesses(raw_items: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes, bytearray)):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for index, access in enumerate(raw_items):
+        payload = dict(access) if isinstance(access, Mapping) else {"store": f"memory-{index + 1}"}
+        store = _first_nonempty(
+            payload.get("store"),
+            payload.get("memory_store"),
+            payload.get("memory"),
+            f"memory-{index + 1}",
+        )
+        operation = _first_nonempty(
+            payload.get("operation"),
+            payload.get("action"),
+            payload.get("type"),
+            "read",
+        )
+        item: dict[str, Any] = {
+            "store": str(store),
+            "operation": str(operation),
+        }
+        for key, aliases in {
+            "key": ("key", "query"),
+            "value": ("value", "output", "result"),
+            "trust_boundary": ("trust_boundary",),
+        }.items():
+            value = _first_nonempty(*(payload.get(alias) for alias in aliases))
+            if value not in (None, ""):
+                item[key] = value
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping) and metadata:
+            item["metadata"] = dict(metadata)
+        normalized.append(item)
+    return normalized
+
+
+def _normalize_handoffs(raw_items: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes, bytearray)):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for handoff in raw_items:
+        payload = dict(handoff) if isinstance(handoff, Mapping) else {}
+        from_agent = _first_nonempty(payload.get("from_agent"), payload.get("from"))
+        to_agent = _first_nonempty(payload.get("to_agent"), payload.get("to"))
+        if from_agent in (None, "") or to_agent in (None, ""):
+            continue
+        item: dict[str, Any] = {
+            "from_agent": str(from_agent),
+            "to_agent": str(to_agent),
+        }
+        reason = payload.get("reason")
+        if reason not in (None, ""):
+            item["reason"] = reason
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping) and metadata:
+            item["metadata"] = dict(metadata)
+        normalized.append(item)
+    return normalized
+
+
+def _build_artifact_steps(
+    tool_calls: list[dict[str, Any]],
+    retrieval_context: list[dict[str, Any]],
+    memory_accesses: list[dict[str, Any]],
+    handoffs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = []
+
+    for index, tool in enumerate(tool_calls):
+        steps.append(
+            {
+                "step_id": f"tool-{index + 1}",
+                "type": "tool_call",
+                "tool_name": tool["name"],
+                "input": tool.get("arguments"),
+                "output": tool.get("output"),
+                "trust_boundary": tool.get("trust_boundary"),
+                "memory_store": tool.get("memory_store"),
+            }
+        )
+
+    for index, item in enumerate(retrieval_context):
+        steps.append(
+            {
+                "step_id": f"retrieval-{index + 1}",
+                "type": "retrieval",
+                "content": item.get("content"),
+                "input": item.get("query"),
+                "output": item.get("content"),
+                "trust_boundary": item.get("trust_boundary"),
+            }
+        )
+
+    for index, access in enumerate(memory_accesses):
+        steps.append(
+            {
+                "step_id": f"memory-{index + 1}",
+                "type": "memory_access",
+                "memory_store": access["store"],
+                "input": access.get("key"),
+                "output": access.get("value"),
+                "trust_boundary": access.get("trust_boundary"),
+            }
+        )
+
+    for index, handoff in enumerate(handoffs):
+        steps.append(
+            {
+                "step_id": f"handoff-{index + 1}",
+                "type": "handoff",
+                "agent_id": handoff["from_agent"],
+                "output": {
+                    "to_agent": handoff["to_agent"],
+                    "reason": handoff.get("reason"),
+                },
+            }
+        )
+
+    return [
+        {
+            key: value
+            for key, value in step.items()
+            if value not in (None, "", [], {})
+        }
+        for step in steps
+    ]
+
+
 def normalize_session_steps(raw_steps: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_steps, Sequence) or isinstance(raw_steps, (str, bytes, bytearray)):
         return []
@@ -212,11 +415,54 @@ def build_session_trace(
         case_meta.get("steps"),
         case_meta.get("session_steps"),
         case_meta.get("attack_steps"),
+        response_meta.get("steps"),
+        response_meta.get("session_steps"),
+        response_meta.get("attack_steps"),
     )
     steps = normalize_session_steps(raw_steps)
 
     if not steps:
-        steps = _normalize_conversation_steps(_as_list(case_meta.get("conversation_trace")))
+        steps = _normalize_conversation_steps(
+            _as_list(
+                _first_nonempty(
+                    case_meta.get("conversation_trace"),
+                    response_meta.get("conversation_trace"),
+                )
+            )
+        )
+
+    tool_calls = _normalize_tool_calls(
+        _first_nonempty(
+            response_meta.get("tools_called"),
+            case_meta.get("tools_called"),
+        )
+    )
+    retrieval_context = _normalize_retrieval_context(
+        _first_nonempty(
+            response_meta.get("retrieval_context"),
+            case_meta.get("retrieval_context"),
+        )
+    )
+    memory_accesses = _normalize_memory_accesses(
+        _first_nonempty(
+            response_meta.get("memory_accesses"),
+            case_meta.get("memory_accesses"),
+        )
+    )
+    handoffs = _normalize_handoffs(
+        _first_nonempty(
+            response_meta.get("handoffs"),
+            case_meta.get("handoffs"),
+        )
+    )
+
+    if not steps:
+        steps = _build_artifact_steps(
+            tool_calls,
+            retrieval_context,
+            memory_accesses,
+            handoffs,
+        )
 
     payload: dict[str, Any] = {}
     if session_id is not None:
@@ -225,4 +471,12 @@ def build_session_trace(
         payload["attack_id"] = str(attack_id)
     if steps:
         payload["steps"] = steps
+    if tool_calls:
+        payload["tools_called"] = tool_calls
+    if retrieval_context:
+        payload["retrieval_context"] = retrieval_context
+    if memory_accesses:
+        payload["memory_accesses"] = memory_accesses
+    if handoffs:
+        payload["handoffs"] = handoffs
     return payload

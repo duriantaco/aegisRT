@@ -174,6 +174,53 @@ def test_score_evaluator_promotes_attack_session_artifacts_into_trace():
     assert result.trace["steps"][1]["tool_name"] == "memory_lookup"
     assert result.trace["steps"][1]["trust_boundary"] == "memory_store"
 
+def test_score_evaluator_promotes_structured_agent_artifacts_into_trace():
+    evaluator = ScoreEvaluator()
+    response = TargetResponse(
+        text="unsafe",
+        metadata={
+            "session_id": "agent-session",
+            "attack_id": "agent-attack",
+            "tools_called": [
+                {
+                    "name": "filesystem.read",
+                    "arguments": {"path": "/etc/passwd"},
+                    "output": "root:x:0:0",
+                    "trust_boundary": "filesystem",
+                }
+            ],
+            "retrieval_context": [
+                {
+                    "content": "internal policy",
+                    "source_id": "doc-7",
+                    "query": "secrets",
+                    "trust_boundary": "vector_store",
+                }
+            ],
+            "memory_accesses": [
+                {
+                    "store": "episodic",
+                    "operation": "read",
+                    "key": "tenant_id",
+                    "value": "acme-prod",
+                }
+            ],
+            "handoffs": [
+                {"from_agent": "planner", "to_agent": "executor", "reason": "tool call"}
+            ],
+        },
+    )
+
+    result = evaluator.evaluate(_case(), response, [])
+
+    assert result.trace["session_id"] == "agent-session"
+    assert result.trace["attack_id"] == "agent-attack"
+    assert result.trace["tools_called"][0]["name"] == "filesystem.read"
+    assert result.trace["retrieval_context"][0]["source_id"] == "doc-7"
+    assert result.trace["memory_accesses"][0]["store"] == "episodic"
+    assert result.trace["handoffs"][0]["to_agent"] == "executor"
+    assert result.trace["steps"][0]["type"] == "tool_call"
+
 def test_confidence_high_with_multiple_detectors():
     detections = [
         Detection(detector="regex_a", triggered=True, score=0.9),
@@ -235,3 +282,116 @@ def test_build_remediation_with_explicit_family():
     suggestions = build_remediation("unknown_id", detections, probe_family="injection")
     assert len(suggestions) > 0
     assert any("injection" in s.lower() or "prompt" in s.lower() for s in suggestions)
+
+
+def test_score_evaluator_marks_all_inconclusive_as_failed():
+    """When every detection is inconclusive (judge unreachable), the result
+    must NOT pass — a security tool should fail-safe, not fail-open."""
+    evaluator = ScoreEvaluator()
+    detections = [
+        Detection(
+            detector="llm_judge",
+            triggered=False,
+            score=0.0,
+            evidence={"inconclusive": True, "error": "Judge LLM call failed"},
+        ),
+    ]
+    result = evaluator.evaluate(_case(), _resp(), detections)
+
+    assert result.passed is False
+    assert result.evidence["inconclusive"] is True
+    assert result.evidence["aggregation_mode"] == "inconclusive"
+
+
+def test_score_evaluator_inconclusive_does_not_override_conclusive_detections():
+    """When some detectors are conclusive and one is inconclusive, the
+    conclusive detections should still drive the verdict normally."""
+    evaluator = ScoreEvaluator()
+    detections = [
+        Detection(detector="regex", triggered=False, score=0.0),
+        Detection(
+            detector="llm_judge",
+            triggered=False,
+            score=0.0,
+            evidence={"inconclusive": True, "error": "Judge failed"},
+        ),
+    ]
+    result = evaluator.evaluate(_case(), _resp(), detections)
+
+    # The regex detector gave a clean result, so we trust it
+    assert result.passed is True
+    assert result.evidence.get("inconclusive") is not True
+
+
+def test_score_evaluator_conclusive_trigger_plus_inconclusive_still_fails():
+    """A triggered conclusive detection should still fail even if an
+    inconclusive detection is also present."""
+    evaluator = ScoreEvaluator()
+    detections = [
+        Detection(detector="regex", triggered=True, score=0.9),
+        Detection(
+            detector="llm_judge",
+            triggered=False,
+            score=0.0,
+            evidence={"inconclusive": True, "error": "Judge failed"},
+        ),
+    ]
+    result = evaluator.evaluate(_case(), _resp("I'll help you hack in"), detections)
+
+    assert result.passed is False
+    assert result.score >= 0.5
+    assert result.evidence.get("inconclusive") is not True
+
+
+def test_score_evaluator_includes_attack_techniques_in_evidence():
+    evaluator = ScoreEvaluator()
+    detections = [
+        Detection(detector="regex", triggered=False, score=0.0),
+    ]
+    result = evaluator.evaluate(_case("prompt_injection"), _resp(), detections)
+
+    techniques = result.evidence.get("attack_techniques")
+    assert techniques is not None
+    assert "direct_override" in techniques
+
+
+def test_resistance_profile_computes_from_results():
+    from aegisrt.core.resistance_profile import compute_resistance_profile
+    from aegisrt.core.result import TestResult
+
+    def _r(case_id, passed, techniques):
+        return TestResult(
+            case_id=case_id, probe_id="p", input_text="", response_text="",
+            passed=passed, score=0.0 if passed else 0.8, severity="high", confidence=0.9,
+            evidence={"attack_techniques": techniques},
+        )
+
+    results = [
+        # direct_override: 2 pass, 2 fail = 50%
+        _r("1", True, ["direct_override"]),
+        _r("2", True, ["direct_override"]),
+        _r("3", False, ["direct_override"]),
+        _r("4", False, ["direct_override"]),
+        # encoding_bypass: 4 pass, 0 fail = 100%
+        _r("5", True, ["encoding_bypass"]),
+        _r("6", True, ["encoding_bypass"]),
+        _r("7", True, ["encoding_bypass"]),
+        _r("8", True, ["encoding_bypass"]),
+    ]
+
+    profile = compute_resistance_profile(results)
+
+    assert profile["by_technique"]["direct_override"]["total"] == 4
+    assert profile["by_technique"]["direct_override"]["passed"] == 2
+    assert profile["by_technique"]["direct_override"]["pass_rate"] == 0.5
+
+    assert profile["by_technique"]["encoding_bypass"]["total"] == 4
+    assert profile["by_technique"]["encoding_bypass"]["passed"] == 4
+    assert profile["by_technique"]["encoding_bypass"]["pass_rate"] == 1.0
+
+    assert profile["overall_score"] == 0.75  # (0.5*4 + 1.0*4) / 8
+    assert profile["overall_grade"] == "fair"
+
+    # direct_override should be weakest (50%), encoding_bypass strongest (100%)
+    assert profile["weakest"][0]["id"] == "direct_override"
+    assert profile["strongest"][0]["id"] == "encoding_bypass"

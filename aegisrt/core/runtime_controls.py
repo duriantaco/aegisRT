@@ -217,8 +217,12 @@ class RunnerRuntime:
         if cache_cfg is not None and not cache_cfg.enabled:
             return None
 
-        ttl = cache_cfg.ttl_seconds if cache_cfg else 3600
-        max_size = cache_cfg.max_size_mb if cache_cfg else 100
+        if cache_cfg:
+            ttl = cache_cfg.ttl_seconds
+            max_size = cache_cfg.max_size_mb
+        else:
+            ttl = 3600
+            max_size = 100
         return ResponseCache(
             db_path=Path(output_dir) / "cache.db",
             default_ttl=ttl,

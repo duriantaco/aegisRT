@@ -181,8 +181,78 @@ tailwind.config = {
           </div>
         </div>
 
+        <!-- Inconclusive warning -->
+        <div x-show="runInconclusiveCount()>0" class="mx-4 mt-3 bg-bg border border-warn/30 rounded p-3">
+          <div class="flex items-center gap-2">
+            <span class="text-warn text-sm font-bold">!</span>
+            <span class="text-[11px] text-warn font-semibold" x-text="runInconclusiveCount()+' inconclusive result(s)'"></span>
+            <span class="text-[10px] text-fg-dimmer">— judge LLM unreachable, marked FAIL (fail-safe)</span>
+          </div>
+        </div>
+
+        <!-- Resistance profile -->
+        <div x-show="resistanceProfile()?.techniques_tested" class="mx-4 mt-3 bg-bg border border-bg-border rounded p-3" x-data="{rpExpanded:false}">
+          <div class="flex items-center justify-between cursor-pointer" @click="rpExpanded=!rpExpanded">
+            <div class="flex items-center gap-3">
+              <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">Resistance Profile</div>
+              <span class="text-xs font-bold"
+                :class="resistanceGradeClass()"
+                x-text="resistanceProfile().overall_grade.toUpperCase()+' ('+Math.round(resistanceProfile().overall_score*100)+'%)'">
+              </span>
+              <span class="text-[10px] text-fg-dimmer" x-text="resistanceProfile().techniques_tested+' techniques tested'"></span>
+            </div>
+            <span class="text-[10px] text-fg-dimmer" x-text="rpExpanded?'▲':'▼'"></span>
+          </div>
+          <div x-show="rpExpanded" x-collapse class="mt-3 space-y-1">
+            <template x-for="[tid,info] in sortedTechniques()" :key="tid">
+              <div class="flex items-center gap-2 text-[11px]">
+                <span class="w-44 text-fg-dim truncate" x-text="info.name"></span>
+                <div class="flex-1 h-2 bg-bg-card rounded-full overflow-hidden">
+                  <div class="h-full rounded-full transition-all"
+                    :class="info.pass_rate>=0.95?'bg-pass':info.pass_rate>=0.8?'bg-pass':info.pass_rate>=0.6?'bg-warn':'bg-fail'"
+                    :style="'width:'+Math.round(info.pass_rate*100)+'%'">
+                  </div>
+                </div>
+                <span class="w-10 text-right font-mono"
+                  :class="info.pass_rate>=0.95?'text-pass':info.pass_rate>=0.8?'text-pass':info.pass_rate>=0.6?'text-warn':'text-fail'"
+                  x-text="Math.round(info.pass_rate*100)+'%'">
+                </span>
+                <span class="w-16 text-right text-fg-dimmer" x-text="info.passed+'/'+info.total"></span>
+              </div>
+            </template>
+            <div x-show="resistanceProfile()?.weakest?.length && resistanceProfile().weakest[0].pass_rate<1" class="mt-2 pt-2 border-t border-bg-border">
+              <span class="text-[10px] text-warn font-semibold">Prioritize defenses for: </span>
+              <span class="text-[10px] text-fg-dim" x-text="resistanceProfile().weakest.filter(w=>w.pass_rate<1).slice(0,3).map(w=>w.name).join(', ')"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- OWASP compliance (if available in evidence) -->
+        <div x-show="owaspSummary().length" class="mx-4 mt-3 bg-bg border border-bg-border rounded p-3" x-data="{owaspExpanded:false}">
+          <div class="flex items-center justify-between cursor-pointer" @click="owaspExpanded=!owaspExpanded">
+            <div class="flex items-center gap-3">
+              <div class="text-[10px] text-fg-dimmer uppercase tracking-wider font-semibold">OWASP LLM Top 10</div>
+              <span class="text-[10px] text-fg-dim" x-text="owaspCoverageLabel()"></span>
+            </div>
+            <span class="text-[10px] text-fg-dimmer" x-text="owaspExpanded?'▲':'▼'"></span>
+          </div>
+          <div x-show="owaspExpanded" x-collapse class="mt-3">
+            <div class="grid grid-cols-5 gap-1.5">
+              <template x-for="cat in owaspSummary()" :key="cat.id">
+                <div class="border rounded px-2 py-1.5 text-center"
+                  :class="cat.status==='passed'?'border-pass/30 bg-pass/5':cat.status==='failed'?'border-fail/30 bg-fail/5':'border-bg-border bg-bg-card'">
+                  <div class="text-[10px] font-bold" :class="cat.status==='passed'?'text-pass':cat.status==='failed'?'text-fail':'text-fg-dimmer'" x-text="cat.id"></div>
+                  <div class="text-[9px] text-fg-dimmer truncate" x-text="cat.name"></div>
+                  <div x-show="cat.total>0" class="text-[9px] mt-0.5" :class="cat.status==='passed'?'text-pass':'text-fail'" x-text="cat.passed+'/'+cat.total"></div>
+                  <div x-show="cat.total===0" class="text-[9px] mt-0.5 text-fg-dimmer">—</div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+
         <!-- Probe breakdown tabs -->
-        <div class="flex items-center gap-1 px-4 py-1.5 border-b border-bg-border flex-shrink-0 overflow-x-auto">
+        <div class="flex items-center gap-1 px-4 py-1.5 border-b border-bg-border flex-shrink-0 overflow-x-auto mt-2">
           <button @click="detailFilter.probe=''; setDetailPage(1)"
             class="text-[10px] px-2 py-0.5 rounded transition-colors flex-shrink-0"
             :class="!detailFilter.probe ? 'bg-info/20 text-info' : 'text-fg-dim hover:text-fg'">All</button>
@@ -1243,6 +1313,56 @@ function app() {
       }
       return warnings;
     },
+    // --- Analytics helpers ---
+    runInconclusiveCount(){
+      if(!this.currentRun) return 0;
+      return this.currentRun.summary?.inconclusive || this.currentRun.results.filter(r=>r.evidence?.inconclusive).length;
+    },
+    resistanceProfile(){
+      return this.currentRun?.summary?.resistance_profile || null;
+    },
+    resistanceGradeClass(){
+      const g = this.resistanceProfile()?.overall_grade;
+      if(g==='excellent') return 'text-pass';
+      if(g==='good') return 'text-pass';
+      if(g==='fair') return 'text-warn';
+      return 'text-fail';
+    },
+    sortedTechniques(){
+      const rp = this.resistanceProfile();
+      if(!rp?.by_technique) return [];
+      return Object.entries(rp.by_technique).sort((a,b)=>a[1].pass_rate-b[1].pass_rate);
+    },
+    owaspSummary(){
+      if(!this.currentRun) return [];
+      const owasp = {
+        'LLM01':'Prompt Injection','LLM02':'Sensitive Info Disclosure','LLM03':'Supply Chain',
+        'LLM04':'Data Poisoning','LLM05':'Improper Output','LLM06':'Excessive Agency',
+        'LLM07':'System Prompt Leakage','LLM08':'Vector/Embedding','LLM09':'Misinformation','LLM10':'Unbounded Consumption'
+      };
+      const byCategory = {};
+      for(const r of this.currentRun.results){
+        const cats = r.evidence?.owasp_llm_top10 || [];
+        for(const c of cats){
+          if(!byCategory[c]) byCategory[c]={id:c,name:owasp[c]||c,total:0,passed:0,failed:0};
+          byCategory[c].total++;
+          r.passed ? byCategory[c].passed++ : byCategory[c].failed++;
+        }
+      }
+      return Object.keys(owasp).map(id=>{
+        const cat = byCategory[id] || {id,name:owasp[id],total:0,passed:0,failed:0};
+        cat.status = cat.total===0?'not_tested':cat.failed>0?'failed':'passed';
+        return cat;
+      });
+    },
+    owaspCoverageLabel(){
+      const cats = this.owaspSummary();
+      const tested = cats.filter(c=>c.total>0).length;
+      const passed = cats.filter(c=>c.status==='passed').length;
+      const failed = cats.filter(c=>c.status==='failed').length;
+      return tested+'/10 tested, '+passed+' passed, '+failed+' failed';
+    },
+
     findingNavigationList(){
       return this.allFindings;
     },

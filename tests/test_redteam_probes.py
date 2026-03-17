@@ -299,6 +299,12 @@ class TestRegistryIntegration:
 
     def test_red_team_probes_registered(self):
         probes = register_builtin_probes()
+        assert "agent_tool_abuse" in probes
+        assert "agent_cross_tenant" in probes
+        assert "encoding_attack" in probes
+        assert "instruction_hierarchy" in probes
+        assert "sycophancy" in probes
+        assert "harmful_content" in probes
         assert "rt_system_integrity" in probes
         assert "rt_cbrn" in probes
         assert "rt_cyber" in probes
@@ -310,7 +316,7 @@ class TestRegistryIntegration:
 
     def test_total_probe_count(self):
         probes = register_builtin_probes()
-        assert len(probes) >= 15
+        assert len(probes) >= 27
 
     def test_total_generator_count(self):
         gens = register_builtin_generators()
